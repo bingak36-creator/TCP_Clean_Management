@@ -17,8 +17,17 @@ public class PublicZoneService {
     private final ZoneRepository zoneRepository;
 
     @Transactional(readOnly = true)
-    public List<ZonePublicResponse> getAllBathrooms() {
-        return zoneRepository.findAll().stream()
+    public List<ZonePublicResponse> getBathrooms(Double lat, Double lng, Double radius) {
+        List<Zone> zones;
+        
+        // 위치 정보가 들어왔다면 반경 검색 수행, 아니면 전체 반환
+        if (lat != null && lng != null && radius != null) {
+            zones = zoneRepository.findZonesWithinRadius(lat, lng, radius);
+        } else {
+            zones = zoneRepository.findAll();
+        }
+
+        return zones.stream()
             .map(zone -> ZonePublicResponse.builder()
                 .zoneId(zone.getId())
                 .name(zone.getName())
@@ -34,8 +43,6 @@ public class PublicZoneService {
         Zone zone = zoneRepository.findById(zoneId)
                 .orElseThrow(() -> new IllegalArgumentException("Zone not found"));
 
-        // Here we would ideally check recent SensorDataRaw like in AnalyticsService
-        // For demonstration, returning a mocked status calculation
         return ZoneStatusResponse.builder()
                 .zoneId(zone.getId())
                 .name(zone.getName())

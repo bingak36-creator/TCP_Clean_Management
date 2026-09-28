@@ -16,8 +16,12 @@ public class PublicZoneController {
     private final PublicZoneService publicZoneService;
 
     @GetMapping("/bathrooms")
-    public ResponseEntity<List<ZonePublicResponse>> getAllBathrooms() {
-        return ResponseEntity.ok(publicZoneService.getAllBathrooms());
+    public ResponseEntity<List<ZonePublicResponse>> getBathrooms(
+            @RequestParam(required = false) Double lat,
+            @RequestParam(required = false) Double lng,
+            @RequestParam(required = false, defaultValue = "2.0") Double radius) { // 기본 반경 2km
+        
+        return ResponseEntity.ok(publicZoneService.getBathrooms(lat, lng, radius));
     }
 
     @GetMapping("/zones/{zoneId}/status")
