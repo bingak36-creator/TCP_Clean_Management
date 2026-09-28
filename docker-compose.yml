@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: tcp-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: tcp_clean_db
+      MYSQL_USER: tcp_user
+      MYSQL_PASSWORD: tcp_password
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - tcp-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: tcp-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass redispass
+    volumes:
+      - redis-data:/data
+    networks:
+      - tcp-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tcp-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/tcp_clean_db?useSSL=false&serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true
+      - SPRING_DATASOURCE_USERNAME=tcp_user
+      - SPRING_DATASOURCE_PASSWORD=tcp_password
+      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_PASSWORD=redispass
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - tcp-network
+
+  # [React 프론트엔드 컨테이너]
+  # 팀원분이 frontend 폴더에 React 코드를 채워넣으시면 아래 주석을 풀고 실행하세요!
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: tcp-frontend
+  #   ports:
+  #     - "3000:80" # Nginx가 내부적으로 80번 포트를 씁니다
+  #   depends_on:
+  #     - backend
+  #   networks:
+  #     - tcp-network
+
+networks:
+  tcp-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
