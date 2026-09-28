@@ -15,9 +15,9 @@ public class RateLimitService {
         Long count = redisTemplate.opsForValue().increment(key);
         
         if (count != null && count == 1) {
-            redisTemplate.expire(key, Duration.ofMinutes(1)); // 1ºÐ Á¦ÇÑ
+            redisTemplate.expire(key, Duration.ofMinutes(1)); // 1ë¶„ ì œí•œ
         }
         
-        return count != null && count <= 10; // 1ºÐ´ç 10È¸
+        return count != null && count <= 10; // 1ë¶„ë‹¹ 10íšŒ
     }
 }

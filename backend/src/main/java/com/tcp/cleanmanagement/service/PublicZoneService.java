@@ -20,7 +20,7 @@ public class PublicZoneService {
     public List<ZonePublicResponse> getBathrooms(Double lat, Double lng, Double radius) {
         List<Zone> zones;
         
-        // À§Ä¡ Á¤º¸°¡ µé¾î¿Ô´Ù¸é ¹İ°æ °Ë»ö ¼öÇà, ¾Æ´Ï¸é ÀüÃ¼ ¹İÈ¯
+        // ìœ„ì¹˜ ì •ë³´ê°€ ë“¤ì–´ì™”ë‹¤ë©´ ë°˜ê²½ ê²€ìƒ‰ ìˆ˜í–‰, ì•„ë‹ˆë©´ ì „ì²´ ë°˜í™˜
         if (lat != null && lng != null && radius != null) {
             zones = zoneRepository.findZonesWithinRadius(lat, lng, radius);
         } else {
@@ -47,7 +47,7 @@ public class PublicZoneService {
                 .zoneId(zone.getId())
                 .name(zone.getName())
                 .status("NORMAL") 
-                .statusMessage("ÀÌ¿ëÇÏ±â ÀûÀıÇÑ »óÅÂÀÔ´Ï´Ù.")
+                .statusMessage("ì´ìš©í•˜ê¸° ì ì ˆí•œ ìƒíƒœì…ë‹ˆë‹¤.")
                 .build();
     }
 }

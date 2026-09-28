@@ -3,21 +3,24 @@ package com.tcp.cleanmanagement.service;
 import com.tcp.cleanmanagement.entity.Alert;
 import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
+import com.tcp.cleanmanagement.entity.SensorMetric;
 import com.tcp.cleanmanagement.entity.Zone;
 import com.tcp.cleanmanagement.enums.AlertStatus;
 import com.tcp.cleanmanagement.enums.AlertType;
-import com.tcp.cleanmanagement.enums.SensorType;
+import com.tcp.cleanmanagement.enums.MetricCode;
 import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
 import com.tcp.cleanmanagement.repository.AlertRepository;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import java.time.LocalDateTime;
-import java.util.List;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
+
+import java.math.BigDecimal;
 
 @Slf4j
 @Service
@@ -27,43 +30,41 @@ public class AnalyticsService {
     private final AlertRepository alertRepository;
 
     @Async
-    @EventListener
-    @Transactional
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void handleSensorDataSaved(SensorDataSavedEvent event) {
-        SensorDataRaw currentData = event.getData();
-        Sensor sensor = currentData.getSensor();
+        SensorDataRaw currentData = dataRepository.findById(event.getDataId()).orElse(null);
+        if (currentData == null) return;
+        SensorMetric metric = currentData.getMetric();
+        Sensor sensor = metric.getSensor();
         Zone zone = sensor.getZone();
 
         if (zone == null) return;
 
-        LocalDateTime fiveMinsAgo = LocalDateTime.now().minusMinutes(5);
-        List<SensorDataRaw> recentData = dataRepository.findRecentDataBySensorId(sensor.getId(), fiveMinsAgo);
-
-        // Analyze based on sensor type
-        if (sensor.getSensorType() == SensorType.GAS) {
-            analyzeGasData(currentData, recentData, zone);
-        } else if (sensor.getSensorType() == SensorType.TEMP_HUMID) {
+        if (metric.getMetricCode() == MetricCode.GAS) {
+            analyzeGasData(currentData, metric, zone);
+        } else if (metric.getMetricCode() == MetricCode.TEMPERATURE) {
             analyzeTempHumidData(currentData, zone);
         }
     }
 
-    private void analyzeGasData(SensorDataRaw currentData, List<SensorDataRaw> recentData, Zone zone) {
-        // Simple logic: if gas level exceeds pleasantThreshold by a lot, consider it smoking
-        Float threshold = zone.getPleasantThreshold() != null ? zone.getPleasantThreshold() : 50.0f; // default 50
-        Float currentValue = currentData.getValue1(); // Assuming value1 is Gas concentration
+    private void analyzeGasData(SensorDataRaw currentData, SensorMetric metric, Zone zone) {
+        if ("UNVERIFIED".equals(metric.getUnitCode()) || metric.getPleasantThreshold() == null) return;
+        BigDecimal currentValue = currentData.getMeasuredValue();
+        BigDecimal threshold = metric.getPleasantThreshold().multiply(new BigDecimal("1.5"));
 
-        if (currentValue != null && currentValue > (threshold * 1.5)) { // 1.5x threshold pattern for smoking
+        if (currentValue.compareTo(threshold) > 0) {
             log.info("Smoking anomaly detected in Zone: {}", zone.getName());
-            createAlert(zone, AlertType.SMOKING, "¿Ø«ÿ∞°Ω∫ ≥Ûµµ ±ﬁªÛΩ¬ ∞®¡ˆ (»Ìø¨/ø™∑˘ ¿«Ω…). ºˆƒ°: " + currentValue);
+            createAlert(zone, AlertType.SMOKING, "Ïú†Ìï¥Í∞ÄÏä§ ÎÜçÎèÑ Í∏âÏÉÅÏäπ Í∞êÏßÄ (Ìù°Ïó∞/Ïó≠Î•ò ÏùòÏã¨). ÏàòÏπò: " + currentValue);
         }
     }
 
     private void analyzeTempHumidData(SensorDataRaw currentData, Zone zone) {
-        Float currentTemp = currentData.getValue1(); // Assuming value1 is Temperature
+        BigDecimal currentTemp = currentData.getMeasuredValue();
 
-        if (currentTemp != null && currentTemp < 0.0) { // Freeze risk if below 0 degrees
+        if (currentTemp.compareTo(BigDecimal.ZERO) < 0) {
             log.info("Freeze risk detected in Zone: {}", zone.getName());
-            createAlert(zone, AlertType.FREEZE, "ø¬µµ øµ«œ «œ∂Ù (µø∆ƒ ¿ß«Ë). «ˆ¿Á ø¬µµ: " + currentTemp + "°∆C");
+            createAlert(zone, AlertType.FREEZE, "Ïò®ÎèÑ ÏòÅÌïò ÌïòÎùΩ (ÎèôÌåå ÏúÑÌóò). ÌòÑÏû¨ Ïò®ÎèÑ: " + currentTemp + "¬∞C");
         }
     }
 

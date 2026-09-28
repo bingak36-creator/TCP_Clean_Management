@@ -27,9 +27,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(org.springframework.web.servlet.config.annotation.CorsRegistry registry) {
         registry.addMapping("/**")
-                .allowedOriginPatterns("*") // ÃßÈÄ ¹èÆ÷ ½Ã ÇÁ·ĞÆ®¿£µå µµ¸ŞÀÎÀ¸·Î ÇÑÁ¤ÇÏ´Â °ÍÀÌ ÁÁ½À´Ï´Ù (¿¹: "http://localhost:3000")
+                .allowedOriginPatterns("*") // ì¶”í›„ ë°°í¬ ì‹œ í”„ë¡ íŠ¸ì—”ë“œ ë„ë©”ì¸ìœ¼ë¡œ í•œì •í•˜ëŠ” ê²ƒì´ ì¢‹ìŠµë‹ˆë‹¤ (ì˜ˆ: "http://localhost:3000")
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .allowCredentials(true);
     }
-
+}

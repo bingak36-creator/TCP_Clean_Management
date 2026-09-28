@@ -1,18 +1,20 @@
 package com.tcp.cleanmanagement.job;
 
-import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataAggregated;
+import com.tcp.cleanmanagement.enums.AggregationGranularity;
 import com.tcp.cleanmanagement.repository.AggregationResult;
 import com.tcp.cleanmanagement.repository.SensorDataAggregatedRepository;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
-import com.tcp.cleanmanagement.repository.SensorRepository;
+import com.tcp.cleanmanagement.repository.SensorMetricRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 
@@ -23,54 +25,51 @@ public class DataAggregationJob {
 
     private final SensorDataRawRepository rawRepository;
     private final SensorDataAggregatedRepository aggregatedRepository;
-    private final SensorRepository sensorRepository;
+    private final SensorMetricRepository metricRepository;
 
-    /**
-     * Executes at the top of every hour (e.g., 10:00, 11:00)
-     * Aggregates data from the previous hour (e.g., 09:00:00 to 09:59:59)
-     */
-    @Scheduled(cron = "0 0 * * * *")
+    @Scheduled(cron = "0 0 * * * *", zone = "UTC")
     @Transactional
     public void aggregateHourlyData() {
-        LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.HOURS);
-        LocalDateTime endTime = now;
-        LocalDateTime startTime = now.minusHours(1);
+        LocalDateTime end = LocalDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.HOURS);
+        aggregateBucket(AggregationGranularity.HOUR, end.minusHours(1), end);
+    }
 
-        log.info("Starting hourly data aggregation from {} to {}", startTime, endTime);
+    @Scheduled(cron = "0 10 0 * * *", zone = "UTC")
+    @Transactional
+    public void aggregateDailyData() {
+        LocalDateTime end = LocalDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.DAYS);
+        aggregateBucket(AggregationGranularity.DAY, end.minusDays(1), end);
+    }
 
-        List<AggregationResult> results = rawRepository.aggregateDataByTimeRange(startTime, endTime);
+    private void aggregateBucket(AggregationGranularity granularity, LocalDateTime start, LocalDateTime end) {
+        List<AggregationResult> results = rawRepository.aggregateDataByTimeRange(start, end);
 
         for (AggregationResult result : results) {
-            Sensor sensor = sensorRepository.findById(result.getSensorId()).orElse(null);
-            if (sensor == null) continue;
-
-            SensorDataAggregated aggregated = SensorDataAggregated.builder()
-                    .sensor(sensor)
-                    .avgValue1(result.getAvgValue1() != null ? result.getAvgValue1().floatValue() : null)
-                    .maxValue1(result.getMaxValue1() != null ? result.getMaxValue1().floatValue() : null)
-                    .avgValue2(result.getAvgValue2() != null ? result.getAvgValue2().floatValue() : null)
-                    .maxValue2(result.getMaxValue2() != null ? result.getMaxValue2().floatValue() : null)
-                    .timeBucket(startTime) // Use the start of the hour as the bucket timestamp
-                    .build();
-
+            SensorDataAggregated aggregated = aggregatedRepository
+                    .findByMetricIdAndGranularityAndBucketStart(result.getMetricId(), granularity, start)
+                    .orElseGet(() -> SensorDataAggregated.builder()
+                            .metric(metricRepository.getReferenceById(result.getMetricId()))
+                            .granularity(granularity)
+                            .bucketStart(start)
+                            .build());
+            aggregated.setSampleCount(result.getSampleCount());
+            aggregated.setSumValue(result.getSumValue());
+            aggregated.setAvgValue(result.getSumValue().divide(
+                    java.math.BigDecimal.valueOf(result.getSampleCount()), 8, RoundingMode.HALF_UP));
+            aggregated.setMinValue(result.getMinValue());
+            aggregated.setMaxValue(result.getMaxValue());
+            aggregated.setComputedAt(LocalDateTime.now(ZoneOffset.UTC));
             aggregatedRepository.save(aggregated);
         }
 
-        log.info("Hourly data aggregation completed. Inserted {} records.", results.size());
+        log.info("{} aggregation completed for {}: {} metrics", granularity, start, results.size());
     }
 
-    /**
-     * Executes every day at 02:00 AM.
-     * Deletes raw data older than 7 days to prevent DB explosion.
-     */
-    @Scheduled(cron = "0 0 2 * * *")
+    @Scheduled(cron = "0 0 2 * * *", zone = "UTC")
     @Transactional
     public void cleanupOldRawData() {
-        LocalDateTime cutoffTime = LocalDateTime.now().minusDays(7);
-        log.info("Starting cleanup of raw data older than {}", cutoffTime);
-
-        rawRepository.deleteOlderThan(cutoffTime);
-
-        log.info("Cleanup of old raw data completed.");
+        LocalDateTime cutoff = LocalDateTime.now(ZoneOffset.UTC).minusDays(7);
+        int deleted = rawRepository.deleteOlderThan(cutoff);
+        log.info("Deleted {} raw readings older than {}", deleted, cutoff);
     }
 }
