@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1640" height="1200" viewBox="0 0 1640 1200" role="img" aria-labelledby="erd-title erd-desc">
+<title id="erd-title">TCP Clean Management ERD v2</title>
+<desc id="erd-desc">제안 스키마: 11개 테이블, 13개 외래 키 관계. 전체 컬럼은 HTML 상세 보기와 SQL 참조.</desc>
+<rect width="100%" height="100%" fill="#FFFFFF"/>
+<text x="40" y="54.599999999999994" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="30" font-weight="400" fill="#142231" text-anchor="start">TCP Clean Management · ERD v2</text>
+<text x="40" y="91.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#435568" text-anchor="start">개선 설계  ·  11개 테이블 / 13개 관계  ·  PK 기본 키 / FK 외래 키  ·  1 ↔ 0..N</text>
+<polyline points="370,220 450,220" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="390" y="216.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="422" y="216.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="860,220 780,220" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="840" y="216.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="808" y="216.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="1190,220 1270,220" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="1210" y="216.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="1240" y="216.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="205,400 205,500" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="226" y="434.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="233" y="493.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="1025,400 1025,500" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="1047" y="434.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="1054" y="493.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="1435,400 1435,500" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="1457" y="434.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="1464" y="493.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="370,315 410,315 410,620 450,620" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="390" y="308.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="422" y="659.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="860,620 780,620" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="840" y="615.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="808" y="615.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="1270,650 1230,650 1230,950 1190,950" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="1250" y="643.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="1204" y="943.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="1435,770 1435,870" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="1457" y="804.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="1464" y="863.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="205,770 205,870" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="226" y="804.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="233" y="863.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="860,715 810,715 810,820 410,820 410,1000 370,1000" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round"/>
+<text x="838" y="708.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">1</text>
+<text x="395" y="993.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<polyline points="1025,870 1025,770" fill="none" stroke="#526B83" stroke-width="2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<text x="1060" y="863.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..1</text>
+<text x="1054" y="806.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#526B83" text-anchor="middle">0..N</text>
+<g class="entity" data-table="users" role="button" tabindex="0" aria-label="users 전체 컬럼 보기">
+<rect x="40" y="130" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="41" y="131" width="328" height="67" rx="9" fill="#E9F3EF" stroke="none" stroke-width="1.5"/>
+<text x="54" y="160.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">USERS</text>
+<text x="54" y="185.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">계정 · 역할 · 비밀번호 해시</text>
+<text x="56" y="226.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="352" y="224.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="56" y="250.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">username</text>
+<text x="56" y="274.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">password_hash</text>
+<text x="56" y="298.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">role</text>
+<text x="56" y="322.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">is_active</text>
+<text x="56" y="386.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 7개 컬럼</text>
+</g>
+<g class="entity" data-table="zone_permissions" role="button" tabindex="0" aria-label="zone_permissions 전체 컬럼 보기">
+<rect x="450" y="130" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="451" y="131" width="328" height="67" rx="9" fill="#E9F3EF" stroke="none" stroke-width="1.5"/>
+<text x="464" y="160.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">ZONE_PERMISSIONS</text>
+<text x="464" y="185.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">사용자 ↔ 관리 구역</text>
+<text x="466" y="226.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="762" y="224.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="466" y="250.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">user_id</text>
+<text x="762" y="248.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="466" y="274.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">zone_id</text>
+<text x="762" y="272.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="466" y="298.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">created_at</text>
+<text x="466" y="386.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 4개 컬럼</text>
+</g>
+<g class="entity" data-table="zones" role="button" tabindex="0" aria-label="zones 전체 컬럼 보기">
+<rect x="860" y="130" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="861" y="131" width="328" height="67" rx="9" fill="#EAF0F7" stroke="none" stroke-width="1.5"/>
+<text x="874" y="160.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">ZONES</text>
+<text x="874" y="185.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">시설 · 위치 · 운영 상태</text>
+<text x="876" y="226.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="1172" y="224.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="876" y="250.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">name</text>
+<text x="876" y="274.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">zone_type</text>
+<text x="876" y="298.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">latitude</text>
+<text x="876" y="322.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">longitude</text>
+<text x="876" y="386.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 10개 컬럼</text>
+</g>
+<g class="entity" data-table="sensors" role="button" tabindex="0" aria-label="sensors 전체 컬럼 보기">
+<rect x="1270" y="130" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="1271" y="131" width="328" height="67" rx="9" fill="#E9F1FC" stroke="none" stroke-width="1.5"/>
+<text x="1284" y="160.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">SENSORS</text>
+<text x="1284" y="185.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">설치 장치 · 수신 상태</text>
+<text x="1286" y="226.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="1582" y="224.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="1286" y="250.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">zone_id</text>
+<text x="1582" y="248.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="1286" y="274.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">device_key</text>
+<text x="1286" y="298.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">sensor_type</text>
+<text x="1286" y="322.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">last_seen_at</text>
+<text x="1286" y="386.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 8개 컬럼</text>
+</g>
+<g class="entity" data-table="user_devices" role="button" tabindex="0" aria-label="user_devices 전체 컬럼 보기">
+<rect x="40" y="500" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="41" y="501" width="328" height="67" rx="9" fill="#E9F3EF" stroke="none" stroke-width="1.5"/>
+<text x="54" y="530.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">USER_DEVICES</text>
+<text x="54" y="555.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">NEW · 사용자별 앱 설치 / 푸시 토큰</text>
+<text x="56" y="596.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="352" y="594.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="56" y="620.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">user_id</text>
+<text x="352" y="618.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="56" y="644.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">installation_id</text>
+<text x="56" y="668.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">fcm_token</text>
+<text x="56" y="692.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">is_active</text>
+<text x="56" y="756.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 9개 컬럼</text>
+</g>
+<g class="entity" data-table="action_logs" role="button" tabindex="0" aria-label="action_logs 전체 컬럼 보기">
+<rect x="450" y="500" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="451" y="501" width="328" height="67" rx="9" fill="#FBF0DE" stroke="none" stroke-width="1.5"/>
+<text x="464" y="530.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">ACTION_LOGS</text>
+<text x="464" y="555.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">현장 메모 · 해결 조치 이력</text>
+<text x="466" y="596.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="762" y="594.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="466" y="620.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">alert_id</text>
+<text x="762" y="618.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="466" y="644.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">admin_id</text>
+<text x="762" y="642.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="466" y="668.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">action_type</text>
+<text x="466" y="692.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">request_key</text>
+<text x="466" y="756.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 7개 컬럼</text>
+</g>
+<g class="entity" data-table="alerts" role="button" tabindex="0" aria-label="alerts 전체 컬럼 보기">
+<rect x="860" y="500" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="861" y="501" width="328" height="67" rx="9" fill="#FBF0DE" stroke="none" stroke-width="1.5"/>
+<text x="874" y="530.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">ALERTS</text>
+<text x="874" y="555.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">이상 감지 사건 · 최초 판단 근거</text>
+<text x="876" y="596.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="1172" y="594.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="876" y="620.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">zone_id</text>
+<text x="1172" y="618.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="876" y="644.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">trigger_reading_id</text>
+<text x="1172" y="642.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="876" y="668.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">status</text>
+<text x="876" y="692.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">evidence</text>
+<text x="876" y="716.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">detector_version</text>
+<text x="876" y="756.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 16개 컬럼</text>
+</g>
+<g class="entity" data-table="sensor_metrics" role="button" tabindex="0" aria-label="sensor_metrics 전체 컬럼 보기">
+<rect x="1270" y="500" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="1271" y="501" width="328" height="67" rx="9" fill="#E9F1FC" stroke="none" stroke-width="1.5"/>
+<text x="1284" y="530.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">SENSOR_METRICS</text>
+<text x="1284" y="555.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">NEW · 측정 항목 / 단위 / 임계치</text>
+<text x="1286" y="596.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="1582" y="594.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="1286" y="620.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">sensor_id</text>
+<text x="1582" y="618.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="1286" y="644.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">metric_code</text>
+<text x="1286" y="668.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">unit_code</text>
+<text x="1286" y="692.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">pleasant_threshold</text>
+<text x="1286" y="715.94" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="17" font-weight="400" fill="#142231" text-anchor="start">needs_ventilation_threshold</text>
+<text x="1286" y="756.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 8개 컬럼</text>
+</g>
+<g class="entity" data-table="notification_deliveries" role="button" tabindex="0" aria-label="notification_deliveries 전체 컬럼 보기">
+<rect x="40" y="870" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="41" y="871" width="328" height="67" rx="9" fill="#FBF0DE" stroke="none" stroke-width="1.5"/>
+<text x="54" y="900.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">NOTIFICATION_DELIVERIES</text>
+<text x="54" y="925.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">NEW · 기기별 발송 / 실패 / 재시도</text>
+<text x="56" y="966.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="352" y="964.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="56" y="990.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">alert_id</text>
+<text x="352" y="988.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="56" y="1014.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">user_device_id</text>
+<text x="352" y="1012.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="56" y="1038.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">status</text>
+<text x="56" y="1062.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">attempt_count</text>
+<text x="56" y="1086.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">next_attempt_at</text>
+<text x="56" y="1126.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 13개 컬럼</text>
+</g>
+<g class="entity" data-table="sensor_data_raw" role="button" tabindex="0" aria-label="sensor_data_raw 전체 컬럼 보기">
+<rect x="860" y="870" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="861" y="871" width="328" height="67" rx="9" fill="#E9F1FC" stroke="none" stroke-width="1.5"/>
+<text x="874" y="900.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">SENSOR_DATA_RAW</text>
+<text x="874" y="925.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">항목별 측정값 · 재전송 중복 방지</text>
+<text x="876" y="966.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="1172" y="964.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="876" y="990.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">metric_id</text>
+<text x="1172" y="988.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="876" y="1014.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">sample_key</text>
+<text x="876" y="1038.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">measured_value</text>
+<text x="876" y="1062.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">measured_at</text>
+<text x="876" y="1086.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">received_at</text>
+<text x="876" y="1126.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 7개 컬럼</text>
+</g>
+<g class="entity" data-table="sensor_data_aggregated" role="button" tabindex="0" aria-label="sensor_data_aggregated 전체 컬럼 보기">
+<rect x="1270" y="870" width="330" height="270" rx="10" fill="#FFFFFF" stroke="#9BAABD" stroke-width="1.5"/>
+<rect x="1271" y="871" width="328" height="67" rx="9" fill="#E9F1FC" stroke="none" stroke-width="1.5"/>
+<text x="1284" y="900.22" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="21" font-weight="400" fill="#142231" text-anchor="start">SENSOR_DATA_AGGREGATED</text>
+<text x="1284" y="925.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#435568" text-anchor="start">시간 / 일 집계 · 표본 수 / 합계</text>
+<text x="1286" y="966.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">id</text>
+<text x="1582" y="964.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">PK</text>
+<text x="1286" y="990.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">metric_id</text>
+<text x="1582" y="988.3" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="400" fill="#195770" text-anchor="end">FK</text>
+<text x="1286" y="1014.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">granularity</text>
+<text x="1286" y="1038.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">bucket_start</text>
+<text x="1286" y="1062.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">sample_count</text>
+<text x="1286" y="1086.76" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="18" font-weight="400" fill="#142231" text-anchor="start">sum_value</text>
+<text x="1286" y="1126.48" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="14" font-weight="400" fill="#435568" text-anchor="start">전체 10개 컬럼</text>
+</g>
+<text x="40" y="1183.12" font-family="Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="400" fill="#435568" text-anchor="start">주요 컬럼 중심의 관계도 · 점선: 원본 삭제 시 NULL · 상세 화면에서 테이블 선택 가능</text>
+</svg>

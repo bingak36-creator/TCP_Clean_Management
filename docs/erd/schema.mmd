@@ -1,0 +1,136 @@
+%% Proposed schema v2. Full column list from schema.sql.
+erDiagram
+    USERS {
+        bigint id PK
+        varchar username
+        varchar password_hash
+        enum role
+        boolean is_active
+        datetime created_at
+        datetime updated_at
+    }
+    USER_DEVICES {
+        bigint id PK
+        bigint user_id FK
+        varchar installation_id
+        enum platform
+        varchar fcm_token "nullable"
+        boolean is_active
+        datetime last_seen_at "nullable"
+        datetime created_at
+        datetime updated_at
+    }
+    ZONES {
+        bigint id PK
+        varchar name
+        varchar address
+        decimal latitude
+        decimal longitude
+        enum zone_type
+        boolean is_our_solution
+        boolean is_active
+        datetime created_at
+        datetime updated_at
+    }
+    ZONE_PERMISSIONS {
+        bigint id PK
+        bigint user_id FK
+        bigint zone_id FK
+        datetime created_at
+    }
+    SENSORS {
+        bigint id PK
+        bigint zone_id FK
+        varchar device_key
+        enum sensor_type
+        enum status
+        datetime last_seen_at "nullable"
+        datetime created_at
+        datetime updated_at
+    }
+    SENSOR_METRICS {
+        bigint id PK
+        bigint sensor_id FK
+        enum metric_code
+        varchar unit_code
+        decimal pleasant_threshold "nullable"
+        decimal needs_ventilation_threshold "nullable"
+        datetime created_at
+        datetime updated_at
+    }
+    SENSOR_DATA_RAW {
+        bigint id PK
+        bigint metric_id FK
+        varchar sample_key
+        decimal measured_value
+        datetime measured_at
+        datetime received_at
+        enum time_source
+    }
+    SENSOR_DATA_AGGREGATED {
+        bigint id PK
+        bigint metric_id FK
+        enum granularity
+        datetime bucket_start
+        bigint sample_count
+        decimal sum_value
+        decimal avg_value
+        decimal min_value
+        decimal max_value
+        datetime computed_at
+    }
+    ALERTS {
+        bigint id PK
+        bigint zone_id FK
+        bigint trigger_reading_id FK "nullable"
+        enum alert_type
+        enum status
+        varchar message
+        varchar detector_version
+        json evidence
+        datetime first_detected_at
+        datetime last_detected_at
+        bigint occurrence_count
+        datetime resolved_at "nullable"
+        bigint version
+        datetime created_at
+        datetime updated_at
+        bigint open_zone_id "generated"
+    }
+    ACTION_LOGS {
+        bigint id PK
+        bigint alert_id FK
+        bigint admin_id FK
+        enum action_type
+        text action_detail
+        varchar request_key
+        datetime created_at
+    }
+    NOTIFICATION_DELIVERIES {
+        bigint id PK
+        bigint alert_id FK
+        bigint user_device_id FK
+        enum status
+        int attempt_count
+        datetime next_attempt_at
+        varchar lease_token "nullable"
+        datetime locked_until "nullable"
+        datetime sent_at "nullable"
+        varchar provider_message_id "nullable"
+        varchar last_error "nullable"
+        datetime created_at
+        datetime updated_at
+    }
+    USERS ||..o{ USER_DEVICES : "user_id"
+    USERS ||..o{ ZONE_PERMISSIONS : "user_id"
+    ZONES ||..o{ ZONE_PERMISSIONS : "zone_id"
+    ZONES ||..o{ SENSORS : "zone_id"
+    SENSORS ||..o{ SENSOR_METRICS : "sensor_id"
+    SENSOR_METRICS ||..o{ SENSOR_DATA_RAW : "metric_id"
+    SENSOR_METRICS ||..o{ SENSOR_DATA_AGGREGATED : "metric_id"
+    ZONES ||..o{ ALERTS : "zone_id"
+    SENSOR_DATA_RAW |o..o{ ALERTS : "trigger_reading_id"
+    ALERTS ||..o{ ACTION_LOGS : "alert_id"
+    USERS ||..o{ ACTION_LOGS : "admin_id"
+    ALERTS ||..o{ NOTIFICATION_DELIVERIES : "alert_id"
+    USER_DEVICES ||..o{ NOTIFICATION_DELIVERIES : "user_device_id"
