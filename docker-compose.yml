@@ -12,6 +12,11 @@ services:
       MYSQL_USER: tcp_user
       MYSQL_PASSWORD: tcp_password
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -u tcp_user -p$$MYSQL_PASSWORD -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     volumes:
       - mysql-data:/var/lib/mysql
     networks:
@@ -42,8 +47,10 @@ services:
       - SPRING_DATA_REDIS_HOST=redis
       - SPRING_DATA_REDIS_PASSWORD=redispass
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - tcp-network
 

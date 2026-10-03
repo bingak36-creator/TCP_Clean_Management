@@ -22,6 +22,10 @@ public class SensorDataRaw {
     @JoinColumn(name = "metric_id", nullable = false)
     private SensorMetric metric;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "device_set_history_id")
+    private DeviceSetHistory deviceSetHistory;
+
     @Column(nullable = false, length = 64)
     private String sampleKey;
 

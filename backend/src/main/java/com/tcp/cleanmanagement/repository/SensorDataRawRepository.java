@@ -1,6 +1,7 @@
 package com.tcp.cleanmanagement.repository;
 
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
+import com.tcp.cleanmanagement.entity.DeviceSetHistory;
 import com.tcp.cleanmanagement.enums.MetricCode;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -13,6 +14,13 @@ import java.util.Optional;
 
 public interface SensorDataRawRepository extends JpaRepository<SensorDataRaw, Long> {
     Optional<SensorDataRaw> findByMetricIdAndSampleKey(Long metricId, String sampleKey);
+
+    @Modifying
+    @Query("UPDATE SensorDataRaw d SET d.deviceSetHistory = :history " +
+           "WHERE d.deviceSetHistory IS NULL AND d.metric.id IN " +
+           "(SELECT m.id FROM SensorMetric m WHERE m.sensor.deviceSet.id = :setId)")
+    int linkUnassignedHistory(@Param("setId") Long deviceSetId,
+                              @Param("history") DeviceSetHistory history);
 
     @Query("SELECT d.metric.id as metricId, COUNT(d) as sampleCount, " +
            "SUM(d.measuredValue) as sumValue, MIN(d.measuredValue) as minValue, MAX(d.measuredValue) as maxValue " +

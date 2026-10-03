@@ -68,6 +68,11 @@ frontend/.env.development.local
 frontend/.env.test.local
 frontend/.env.production.local
 
+# Local ESP32 sketches may contain Wi-Fi credentials
+*.ino
+backups/
+/firmware/
+
 # ==========================================
 # Docker (Optional)
 # ==========================================

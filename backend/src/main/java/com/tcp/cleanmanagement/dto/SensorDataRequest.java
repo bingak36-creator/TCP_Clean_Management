@@ -20,6 +20,9 @@ public class SensorDataRequest {
     @Pattern(regexp = "[A-Za-z0-9._:-]{1,64}")
     private String sampleKey;
 
+    @Pattern(regexp = "[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
+    private String macAddress;
+
     private OffsetDateTime measuredAt;
 
     @NotEmpty

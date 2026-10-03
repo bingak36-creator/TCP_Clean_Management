@@ -18,6 +18,14 @@ public class Alert {
     @JoinColumn(name = "zone_id")
     private Zone zone;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "sensor_id")
+    private Sensor sensor;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "device_set_history_id")
+    private DeviceSetHistory deviceSetHistory;
+
     @Enumerated(EnumType.STRING)
     private AlertType alertType;
 

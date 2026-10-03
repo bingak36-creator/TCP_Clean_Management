@@ -1,6 +1,7 @@
 package com.tcp.cleanmanagement.service;
 
 import com.tcp.cleanmanagement.entity.Alert;
+import com.tcp.cleanmanagement.entity.DeviceSetHistory;
 import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.SensorMetric;
@@ -37,40 +38,47 @@ public class AnalyticsService {
         if (currentData == null) return;
         SensorMetric metric = currentData.getMetric();
         Sensor sensor = metric.getSensor();
-        Zone zone = sensor.getZone();
+        // Async processing may run after an installation has moved. Use the
+        // configuration recorded when this reading was accepted.
+        Zone zone = currentData.getDeviceSetHistory() == null ? sensor.getZone()
+                : currentData.getDeviceSetHistory().getZone();
 
         if (zone == null) return;
 
         if (metric.getMetricCode() == MetricCode.GAS) {
-            analyzeGasData(currentData, metric, zone);
+            analyzeGasData(currentData, metric, sensor, zone);
         } else if (metric.getMetricCode() == MetricCode.TEMPERATURE) {
-            analyzeTempHumidData(currentData, zone);
+            analyzeTempHumidData(currentData, sensor, zone);
         }
     }
 
-    private void analyzeGasData(SensorDataRaw currentData, SensorMetric metric, Zone zone) {
+    private void analyzeGasData(SensorDataRaw currentData, SensorMetric metric, Sensor sensor, Zone zone) {
         if ("UNVERIFIED".equals(metric.getUnitCode()) || metric.getPleasantThreshold() == null) return;
         BigDecimal currentValue = currentData.getMeasuredValue();
         BigDecimal threshold = metric.getPleasantThreshold().multiply(new BigDecimal("1.5"));
 
         if (currentValue.compareTo(threshold) > 0) {
             log.info("Smoking anomaly detected in Zone: {}", zone.getName());
-            createAlert(zone, AlertType.SMOKING, "유해가스 농도 급상승 감지 (흡연/역류 의심). 수치: " + currentValue);
+            createAlert(zone, sensor, currentData.getDeviceSetHistory(), AlertType.SMOKING,
+                    "유해가스 농도 급상승 감지 (흡연/역류 의심). 수치: " + currentValue);
         }
     }
 
-    private void analyzeTempHumidData(SensorDataRaw currentData, Zone zone) {
+    private void analyzeTempHumidData(SensorDataRaw currentData, Sensor sensor, Zone zone) {
         BigDecimal currentTemp = currentData.getMeasuredValue();
 
         if (currentTemp.compareTo(BigDecimal.ZERO) < 0) {
             log.info("Freeze risk detected in Zone: {}", zone.getName());
-            createAlert(zone, AlertType.FREEZE, "온도 영하 하락 (동파 위험). 현재 온도: " + currentTemp + "°C");
+            createAlert(zone, sensor, currentData.getDeviceSetHistory(), AlertType.FREEZE,
+                    "온도 영하 하락 (동파 위험). 현재 온도: " + currentTemp + "°C");
         }
     }
 
-    private void createAlert(Zone zone, AlertType type, String message) {
+    private void createAlert(Zone zone, Sensor sensor, DeviceSetHistory history, AlertType type, String message) {
         Alert alert = Alert.builder()
                 .zone(zone)
+                .sensor(sensor)
+                .deviceSetHistory(history)
                 .alertType(type)
                 .message(message)
                 .status(AlertStatus.UNRESOLVED)
