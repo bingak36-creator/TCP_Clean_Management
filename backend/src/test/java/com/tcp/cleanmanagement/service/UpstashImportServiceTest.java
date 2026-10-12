@@ -79,6 +79,34 @@ class UpstashImportServiceTest {
                 + ",\"humidity_percent\":" + humidity + ",\"mq135_adc\":" + gas + "}";
     }
 
+    @Test
+    void directApiSavesAllMetricsWithoutAdvancingRedisCheckpointAndDeduplicatesRetry() {
+        String mac = "AA:BB:CC:DD:EE:06";
+        String payload = payload(mac, true, "45", "293");
+        service.checkpoint(mac);
+        long before = rawRepository.count();
+        assertTrue(service.receiveDirectSample(payload));
+        assertEquals(before + 3, rawRepository.count());
+        assertEquals("direct_api", sampleRepository.findByMacAddressAndSampleKey(mac, key(payload)).orElseThrow().getIngestSource());
+        assertEquals(0, service.checkpoint(mac));
+        assertFalse(service.receiveDirectSample(payload));
+        assertEquals(before + 3, rawRepository.count());
+        // A later Redis import of the same packet advances only its own checkpoint.
+        assertFalse(service.importSample(mac, 1791783017, payload));
+        assertEquals(1791783017, service.checkpoint(mac));
+    }
+
+    @Test
+    void invalidDirectPacketRollsBackWithoutArchivedOrPartialMetricRows() {
+        String mac = "AA:BB:CC:DD:EE:07";
+        String payload = payload(mac, true, "101", "293");
+        long before = rawRepository.count();
+        assertThrows(RuntimeException.class, () -> service.receiveDirectSample(payload));
+        assertEquals(before, rawRepository.count());
+        assertFalse(deviceRepository.existsById(mac));
+        assertTrue(sampleRepository.findByMacAddressAndSampleKey(mac, key(payload)).isEmpty());
+    }
+
     private String key(String payload) {
         int start = payload.indexOf("\"sample_key\":\"") + "\"sample_key\":\"".length();
         return payload.substring(start, payload.indexOf('"', start));

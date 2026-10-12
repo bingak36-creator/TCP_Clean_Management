@@ -28,11 +28,11 @@ public class UpstashSyncController {
                         Instant.ofEpochSecond((long) d.getLastScore())))
                 .toList();
         return new Status(properties.getRedisUrl() != null && !properties.getRedisUrl().isBlank(),
-                sampleRepository.count(), devices, job.getLastAttempt(), job.getLastSuccess(), job.getLastError());
+                properties.isEnabled(), sampleRepository.count(), devices, job.getLastAttempt(), job.getLastSuccess(), job.getLastError());
     }
 
     public record Device(String macAddress, Long zoneId, Long temperatureHumiditySensorId,
                          Long gasSensorId, Instant lastMeasuredAt) {}
-    public record Status(boolean configured, long importedSamples, List<Device> devices,
+    public record Status(boolean configured, boolean enabled, long importedSamples, List<Device> devices,
                          Instant lastAttempt, Instant lastSuccess, String lastError) {}
 }

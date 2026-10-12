@@ -10,9 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "chart.js": "^4.5.1",
     "framer-motion": "^13.4.3",
     "leaflet": "^1.9.4",
     "react": "^19.2.8",
+    "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.8",
     "react-kakao-maps-sdk": "^1.2.2",
     "react-leaflet": "^5.0.0",

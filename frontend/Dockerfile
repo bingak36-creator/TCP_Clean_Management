@@ -12,6 +12,7 @@ RUN npm run build
 FROM nginx:alpine
 # 빌드된 정적 파일들을 Nginx의 기본 서빙 폴더로 복사합니다 (CRA 기준 build 폴더)
 COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 

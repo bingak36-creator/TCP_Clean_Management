@@ -52,4 +52,15 @@ class UpstashSyncJobTest {
         new UpstashSyncJob(new UpstashSyncProperties(), reader, importer).sync();
         verifyNoInteractions(reader, importer);
     }
+
+    @Test
+    void disabledSyncDoesNotQueryUpstashEvenWithConfiguredUrl() {
+        var properties = new UpstashSyncProperties();
+        properties.setRedisUrl("rediss://example.upstash.io:6379");
+        properties.setEnabled(false);
+        var reader = mock(UpstashHistoryReader.class);
+        var importer = mock(UpstashImportService.class);
+        new UpstashSyncJob(properties, reader, importer).sync();
+        verifyNoInteractions(reader, importer);
+    }
 }

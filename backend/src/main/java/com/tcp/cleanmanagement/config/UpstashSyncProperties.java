@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 @Component
 @ConfigurationProperties(prefix = "iot.upstash")
 public class UpstashSyncProperties {
+    private boolean enabled = true;
     @ToString.Exclude
     private String redisUrl = "";
     @ToString.Exclude

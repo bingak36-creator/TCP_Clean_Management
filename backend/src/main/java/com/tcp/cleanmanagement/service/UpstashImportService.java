@@ -43,6 +43,20 @@ public class UpstashImportService {
 
     @Transactional
     public boolean importSample(String mac, double score, String payload) {
+        return saveSample(mac, score, payload, "upstash", true);
+    }
+
+    /** Direct API ingestion shares the archive but must not move the Redis checkpoint. */
+    @Transactional
+    public boolean receiveDirectSample(String payload) {
+        UpstashSample sample = jsonMapper.readValue(payload, UpstashSample.class);
+        String mac = sample.macAddress() == null ? "" : sample.macAddress().toUpperCase(java.util.Locale.ROOT);
+        if (!mac.matches("([0-9A-F]{2}:){5}[0-9A-F]{2}")) throw new IllegalArgumentException("Invalid MAC address");
+        double score = OffsetDateTime.parse(sample.measuredAt()).toEpochSecond();
+        return saveSample(mac, score, payload, "direct_api", false);
+    }
+
+    private boolean saveSample(String mac, double score, String payload, String source, boolean advanceCheckpoint) {
         UpstashSample sample = jsonMapper.readValue(payload, UpstashSample.class);
         if (!"esp32_direct".equals(sample.source()) || !mac.equalsIgnoreCase(sample.macAddress())
                 || sample.sampleKey() == null || !sample.sampleKey().matches("[A-Za-z0-9._:-]{1,64}")) {
@@ -67,7 +81,7 @@ public class UpstashImportService {
             if (!existing.get().getPayload().equals(payload)) {
                 throw new IllegalArgumentException("Sample key has conflicting payloads");
             }
-            device.setLastScore(Math.max(device.getLastScore(), score));
+            if (advanceCheckpoint) device.setLastScore(Math.max(device.getLastScore(), score));
             return false;
         }
 
@@ -79,9 +93,9 @@ public class UpstashImportService {
         iotDataService.saveSensorData(device.getGasSensor().getId(),
                 request(sample, measuredAt, reading(MetricCode.GAS, sample.mq135Adc())));
         sampleRepository.save(UpstashImportedSample.builder().macAddress(mac).sampleKey(sample.sampleKey())
-                .payload(payload).measuredAt(measuredAt.withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime())
+                .payload(payload).ingestSource(source).measuredAt(measuredAt.withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime())
                 .importedAt(LocalDateTime.now(ZoneOffset.UTC)).build());
-        device.setLastScore(Math.max(device.getLastScore(), score));
+        if (advanceCheckpoint) device.setLastScore(Math.max(device.getLastScore(), score));
         return true;
     }
 

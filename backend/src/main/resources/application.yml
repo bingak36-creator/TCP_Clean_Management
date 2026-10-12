@@ -19,7 +19,11 @@ spring:
       password: redispass
 
 iot:
+  direct:
+    api-key: ${IOT_DIRECT_API_KEY:}
+    mac-address: ${IOT_DIRECT_MAC_ADDRESS:}
   upstash:
+    enabled: ${UPSTASH_SYNC_ENABLED:true}
     redis-url: ${UPSTASH_REDIS_URL:${UPSTASH_REDIS_REST_URL:}}
     rest-token: ${UPSTASH_REDIS_REST_TOKEN:}
     poll-interval-ms: ${UPSTASH_POLL_INTERVAL_MS:120000}
@@ -27,4 +31,6 @@ iot:
     discovery-interval-ms: ${UPSTASH_DISCOVERY_INTERVAL_MS:300000}
 
 app:
+  rate-limit:
+    store: ${RATE_LIMIT_STORE:redis}
   seed-demo-data: ${SEED_DEMO_DATA:true}

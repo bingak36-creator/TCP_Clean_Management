@@ -91,6 +91,10 @@ redis-data/
 credentials.json
 client_secret.json
 
+# ESP32 device-specific connection secret (use the example header)
+arduino/**/device_config.h
+arduino/**/build/
+
 # OS generated files
 .DS_Store
 Thumbs.db

@@ -27,7 +27,7 @@ public class UpstashSyncJob {
 
     @Scheduled(fixedDelayString = "${iot.upstash.poll-interval-ms:120000}", initialDelay = 10000)
     public synchronized void sync() {
-        if (properties.getRedisUrl() == null || properties.getRedisUrl().isBlank()) return;
+        if (!properties.isEnabled() || properties.getRedisUrl() == null || properties.getRedisUrl().isBlank()) return;
         lastAttempt = Instant.now();
         lastError = null;
         try {

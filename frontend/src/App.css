@@ -9,24 +9,10 @@
   position: relative;
 }
 
-/* 데스크탑에서의 검색창 컨테이너 */
-.search-bar-container {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 400px;
-  padding: 20px 24px;
-  background-color: #fff;
-  z-index: 1010;
-  border-bottom: 1px solid #f1f5f9;
-  box-sizing: border-box;
-  transition: margin-left 0.3s ease-in-out;
-}
-
 .layout-sidebar {
   width: 400px;
   height: 100%;
-  padding-top: 85px; 
+  padding-top: 0;
   display: flex;
   flex-direction: column;
   background-color: #fff;
@@ -35,6 +21,7 @@
   transition: transform 0.3s ease-in-out, margin-left 0.3s ease-in-out;
   flex-shrink: 0;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .layout-map-area {
@@ -71,27 +58,15 @@
 /* 모바일 반응형 레이아웃 */
 @media screen and (max-width: 768px) {
   .layout-container {
-    flex-direction: column-reverse; 
-  }
-
-  .search-bar-container {
-    top: 20px;
-    left: 5%;
-    width: 90%;
-    padding: 0;
-    border-bottom: none;
-    border-radius: 10px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    background: transparent;
-    margin-left: 0 !important;
+    flex-direction: column-reverse;
   }
 
   .layout-sidebar {
     width: 100% !important;
-    height: 45vh; 
-    margin-left: 0 !important; 
-    padding-top: 0; 
-    box-shadow: 0 -4px 16px rgba(0,0,0,0.1); 
+    height: 52vh;
+    margin-left: 0 !important;
+    padding-top: 0;
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.1);
     border-radius: 20px 20px 0 0;
     z-index: 1000;
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -110,7 +85,7 @@
   }
 
   .layout-toggle-btn {
-    display: none; 
+    display: none;
   }
 
   .mobile-sheet-toggle {
@@ -124,7 +99,7 @@
     border-radius: 20px 20px 0 0;
     flex-shrink: 0;
   }
-  
+
   .mobile-sheet-handle {
     width: 40px;
     height: 5px;
@@ -141,13 +116,13 @@
 
 /* 선택된 마커 숨쉬듯 커지는(아래에서 위로) 애니메이션 */
 @keyframes marker-bounce {
-  0%, 100% { 
-    transform: rotate(-45deg) scale(1) translate(0, 0); 
+  0%, 100% {
+    transform: rotate(-45deg) scale(1) translate(0, 0);
     box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
   }
-  50% { 
+  50% {
     /* 바닥 고정 후 위로 솟아오르는 느낌을 위해 translate 적용 */
-    transform: rotate(-45deg) scale(1.3) translate(4px, -4px); 
+    transform: rotate(-45deg) scale(1.3) translate(4px, -4px);
     box-shadow: 6px 6px 14px rgba(0,0,0,0.4);
   }
 }
@@ -191,3 +166,1412 @@
     height: 20px;
   }
 }
+
+/* 근접 상단 알림 배너 */
+.top-proximity-banner,
+.top-10m-proximity-banner {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1010;
+  background-color: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid #bfdbfe;
+  box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 580px;
+  width: calc(100% - 48px);
+  box-sizing: border-box;
+  animation: slideDownBanner 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media screen and (max-width: 768px) {
+  .top-proximity-banner,
+  .top-10m-proximity-banner {
+    top: 175px;
+    width: calc(100% - 32px);
+    padding: 12px 14px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+}
+
+@keyframes slideDownBanner {
+  from {
+    transform: translate(-50%, -16px);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+/* 근접 레이더 펄스 */
+@keyframes proximity-radar {
+  0% {
+    transform: rotate(-45deg) scale(0.9);
+    opacity: 0.9;
+  }
+  100% {
+    transform: rotate(-45deg) scale(2.2);
+    opacity: 0;
+  }
+}
+
+.proximity-radar-ring {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: rgba(37, 99, 235, 0.22);
+  border: 1.5px solid #3b82f6;
+  animation: proximity-radar 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* 마커 플로팅 근접 배지 */
+.marker-proximity-badge,
+.marker-10m-badge {
+  position: absolute;
+  bottom: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #0f172a;
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+  border: 1px solid #3b82f6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 1005;
+  pointer-events: none;
+}
+
+/* 펄스 닷 */
+.ping-dot {
+  position: relative;
+  display: inline-flex;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #22c55e;
+}
+
+.ping-dot::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  background-color: #4ade80;
+  animation: gps-pulse 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* 지도 우측 컨트롤 툴바 */
+.map-quick-controls {
+  position: absolute;
+  right: 24px;
+  bottom: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+
+@media screen and (max-width: 768px) {
+  .map-quick-controls {
+    right: 5%;
+    bottom: auto;
+    top: 250px;
+  }
+}
+
+/* 장소 추천 / 자동완성 드롭다운 */
+.suggestions-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background-color: #fff;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.08);
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+  z-index: 1050;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.suggestion-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  transition: background-color 0.15s ease;
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.suggestion-item:hover {
+  background-color: #f8fafc;
+}
+
+.suggestion-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.suggestion-address {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.suggestion-category {
+  font-size: 10px;
+  color: #2563eb;
+  background-color: #eff6ff;
+  padding: 1px 5px;
+  border-radius: 4px;
+  display: inline-block;
+  margin-top: 3px;
+}
+
+/* ==========================================================
+   신규 모던 사이드바 & 통합 경로 검색 바 스타일
+   ========================================================== */
+
+.sidebar-content-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 사이드바 상단 고정 헤더 */
+.sidebar-header {
+  padding: 14px 16px 12px;
+  background-color: #ffffff;
+  border-bottom: 1px solid #f1f5f9;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 50;
+  box-sizing: border-box;
+}
+
+/* 2열 통합 경로 입력 카드 */
+.unified-route-card {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 8px 10px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.unified-route-card:focus-within {
+  border-color: #94a3b8;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* 좌측 경로 핀 및 연결선 */
+.route-track-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+.route-origin-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #10b981;
+  box-shadow: 0 0 0 2px #d1fae5;
+}
+
+.route-track-line {
+  width: 1px;
+  height: 18px;
+  background-color: #e2e8f0;
+  margin: 3px 0;
+}
+
+.route-dest-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #f43f5e;
+  box-shadow: 0 0 0 2px #ffe4e6;
+}
+
+/* 중앙 입력부 (2열) */
+.route-inputs-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.route-input-row {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  position: relative;
+}
+
+.route-input-divider {
+  height: 1px;
+  background-color: #f1f5f9;
+  margin: 1px 0;
+}
+
+.route-clean-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+  padding: 0;
+}
+
+.route-clean-input::placeholder {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.route-gps-active-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #059669;
+  cursor: default;
+}
+
+.route-mini-refresh-btn {
+  border: none;
+  background: transparent;
+  color: #059669;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.route-mini-refresh-btn:hover {
+  opacity: 1;
+}
+
+.route-clear-icon-btn {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.route-clear-icon-btn:hover {
+  color: #475569;
+}
+
+/* 우측 컨트롤 버튼 컬럼 */
+.route-actions-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.route-action-icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid #e2e8f0;
+  background-color: #f8fafc;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.route-action-icon-btn:hover {
+  background-color: #f1f5f9;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+.route-action-icon-btn.gps-on {
+  background-color: #ecfdf5;
+  color: #059669;
+  border-color: #a7f3d0;
+}
+
+.route-action-icon-btn.search-btn {
+  background-color: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+
+.route-action-icon-btn.search-btn:hover {
+  background-color: #1e293b;
+}
+
+/* 사이드바 최상단 뷰 전환 탭 (탐색 vs 즐겨찾기) */
+.sidebar-top-switcher {
+  display: flex;
+  gap: 6px;
+  background-color: #f1f5f9;
+  padding: 4px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.sidebar-tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #64748b;
+  background-color: transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar-tab-btn:hover {
+  color: #0f172a;
+}
+
+.sidebar-tab-btn.active {
+  background-color: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.sidebar-tab-count {
+  font-size: 11px;
+  font-weight: 800;
+  background-color: #e2e8f0;
+  color: #475569;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.sidebar-tab-btn.active .sidebar-tab-count {
+  background-color: #fef3c7;
+  color: #b45309;
+}
+
+/* 즐겨찾기 전용 패널 헤더 */
+.favorites-panel-header {
+  padding: 4px 2px 8px;
+}
+
+.favorites-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+  margin-bottom: 4px;
+}
+
+.favorites-panel-subtitle {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 12px;
+}
+
+.favorites-chip-group {
+  display: flex;
+  gap: 6px;
+}
+
+.favorites-chip {
+  padding: 5px 11px;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  background-color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.favorites-chip:hover {
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+.favorites-chip.active {
+  background-color: #0f172a;
+  border-color: #0f172a;
+  color: #ffffff;
+}
+
+/* 즐겨찾기 비어있음 안내 상자 */
+.favorites-empty-box {
+  padding: 48px 20px;
+  text-align: center;
+  background-color: #ffffff;
+  border-radius: 16px;
+  border: 1px dashed #cbd5e1;
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.favorites-empty-action-btn {
+  margin-top: 10px;
+  padding: 9px 16px;
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.favorites-empty-action-btn:hover {
+  background-color: #1d4ed8;
+}
+
+/* 카테고리 필터 세그먼트 컨트롤 */
+.category-segmented-control {
+  display: flex;
+  gap: 4px;
+  margin-top: 10px;
+  background-color: #f1f5f9;
+  padding: 3px;
+  border-radius: 9px;
+}
+
+.category-seg-btn {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  background-color: transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.category-seg-btn:hover {
+  color: #0f172a;
+}
+
+.category-seg-btn.active {
+  background-color: #ffffff;
+  color: #0f172a;
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* 사이드바 본문 스크롤 영역 */
+.sidebar-scroll-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 24px;
+  background-color: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 시설 카드 */
+.place-card {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 14px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.place-card:hover {
+  border-color: #cbd5e1;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.04);
+}
+
+.place-card.is-100m {
+  border-left: 3px solid #2563eb;
+  background-color: #fafcff;
+}
+
+.place-card.is-selected {
+  border-color: #2563eb;
+  background-color: #eff6ff;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+
+.place-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.place-title-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.place-type-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+.place-type-badge.restroom {
+  background-color: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.place-type-badge.smoking {
+  background-color: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.place-name-heading {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 파스텔톤 소프트 상태 배지 */
+.place-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.place-status-tag.clean {
+  background-color: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.place-status-tag.busy {
+  background-color: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+
+.place-status-tag.need-clean {
+  background-color: #fff1f2;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+}
+
+.place-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.place-status-tag.clean .place-status-dot {
+  background-color: #10b981;
+}
+
+.place-status-tag.busy .place-status-dot {
+  background-color: #f97316;
+}
+
+.place-status-tag.need-clean .place-status-dot {
+  background-color: #f43f5e;
+}
+
+/* 카드 하단 정보 및 버튼 */
+.place-card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.place-distance-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.place-100m-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #1d4ed8;
+  background-color: #dbeafe;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.place-card-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background-color: #0f172a;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.place-card-nav-btn:hover {
+  background-color: #1e293b;
+}
+
+/* 즐겨찾기 별 버튼 */
+.place-fav-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+  color: #94a3b8;
+}
+
+.place-fav-btn:hover {
+  background-color: #fef3c7;
+  color: #f59e0b;
+}
+
+.place-fav-btn.is-fav {
+  color: #f59e0b;
+}
+
+.category-seg-btn.is-favorite-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.category-seg-btn.is-favorite-tab.active {
+  color: #b45309;
+}
+
+/* ==========================================================
+   대중교통 다중 추천 경로 & 타임라인 - 심플 & 모던 스타일
+   ========================================================== */
+
+.transit-simple-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 대중교통 다중 추천 경로 목록 (기본: 심플 카드 목록 / 클릭: 상세 가는 방법 펼침) */
+.transit-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transit-route-card {
+  background-color: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 14px;
+  overflow: hidden;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.transit-route-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
+}
+
+.transit-route-card.selected {
+  border-color: #2563eb;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.12);
+}
+
+.transit-card-head {
+  padding: 14px 16px;
+  cursor: pointer;
+  user-select: none;
+  background-color: #ffffff;
+  transition: background-color 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.transit-route-card.selected .transit-card-head {
+  background-color: #f8faff;
+}
+
+.transit-card-head:hover {
+  background-color: #f8fafc;
+}
+
+/* 1행: 소요시간 + 도착시간 (좌) / 뱃지 (우) */
+.transit-head-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.transit-time-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.transit-duration-num {
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.transit-arrival-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2563eb;
+  white-space: nowrap;
+}
+
+.transit-badges-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.transit-badge-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.transit-badge-tag.fastest {
+  background-color: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.transit-badge-tag.transfer {
+  background-color: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.transit-badge-tag.walk {
+  background-color: #fefce8;
+  color: #a16207;
+  border: 1px solid #fef08a;
+}
+
+.kakao-live-badge {
+  font-size: 10px;
+  font-weight: 800;
+  color: #3b1e1e;
+  background-color: #fee500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* 2행: 교통수단 칩 흐름 ([9] › [4호선] › [5호선] › [6호선]) */
+.transit-chips-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 1px 0;
+}
+
+.transit-vehicle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.transit-vehicle-pill svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.2;
+}
+
+.transit-pill-arrow {
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.transit-card-route-name {
+  font-size: 14px;
+  font-weight: 800;
+  color: #1e293b;
+  margin: 0;
+}
+
+/* 3행: 슬림 세그먼트 컬러 바 */
+.transit-card-segments {
+  display: flex;
+  gap: 2px;
+  background-color: #f1f5f9;
+  border-radius: 3px;
+  padding: 2px;
+  margin: 2px 0 1px 0;
+}
+
+/* 4행: 메타 정보 + 접기/펼치기 버튼 */
+.transit-head-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+}
+
+.transit-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.transit-dot-sep {
+  color: #cbd5e1;
+}
+
+.transit-expand-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  padding: 4px 8px;
+  background-color: #f1f5f9;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.transit-route-card.selected .transit-expand-indicator {
+  background-color: #eff6ff;
+  color: #2563eb;
+}
+
+/* 상세 타임라인 바디 */
+.transit-card-detail-body {
+  border-top: 1px solid #edf2f7;
+  background-color: #fafbfc;
+  padding: 16px;
+  animation: transitFadeIn 0.2s ease;
+}
+
+@keyframes transitFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.transit-clean-timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.clean-timeline-item {
+  display: flex;
+  gap: 12px;
+  position: relative;
+  min-height: 48px;
+}
+
+.clean-timeline-pillar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 24px;
+  flex-shrink: 0;
+}
+
+.clean-node-circle {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  flex-shrink: 0;
+  background-color: #64748b;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.clean-node-circle.walk {
+  background-color: #94a3b8;
+}
+
+.clean-node-circle.transfer {
+  background-color: #8b5cf6;
+}
+
+.clean-node-circle.arrival {
+  background-color: #ef4444;
+}
+
+.clean-timeline-line {
+  width: 2px;
+  flex: 1;
+  background-color: #cbd5e1;
+  margin: 3px 0;
+}
+
+.clean-timeline-line.dashed {
+  border-left: 2px dashed #cbd5e1;
+  background-color: transparent;
+  width: 0;
+}
+
+.clean-timeline-body {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 14px;
+}
+
+.clean-step-header-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  line-height: 1.4;
+}
+
+.clean-transport-pill {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.clean-step-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.clean-step-time-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  background-color: #f1f5f9;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+
+/* 정류장 아코디언 토글 버튼 */
+.clean-stops-accordion-wrap {
+  margin: 6px 0;
+}
+
+.clean-stops-toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  padding: 4px 10px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.clean-stops-toggle-pill:hover {
+  background-color: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.clean-stops-dropdown-list {
+  margin-top: 6px;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 2px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.clean-stop-sub-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.clean-stop-bullet {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.clean-stop-name {
+  color: #475569;
+  font-weight: 500;
+}
+
+/* 하차 행 */
+.clean-step-alight-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.clean-alight-bullet {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #ffffff;
+  border: 2px solid #64748b;
+  flex-shrink: 0;
+}
+
+.clean-step-desc {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
+  margin-top: 3px;
+}
+
+.clean-step-hint {
+  font-size: 11px;
+  color: #2563eb;
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+.clean-inapp-live-tag {
+  font-size: 10px;
+  font-weight: 800;
+  color: #1d4ed8;
+  background-color: #dbeafe;
+  padding: 2px 7px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* 앱 자체 턴바이턴 타임라인 박스 */
+.inapp-turn-timeline-box {
+  margin-top: 14px;
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.inapp-turn-header {
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* 안내 시작 버튼 및 실시간 내비게이션 바 */
+.inapp-start-nav-row {
+  margin-top: 14px;
+  padding: 4px 0 2px;
+}
+
+.inapp-start-nav-action-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 18px;
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.inapp-start-nav-action-btn:hover {
+  background-color: #1d4ed8;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+}
+
+.inapp-start-nav-action-btn:active {
+  transform: translateY(0);
+}
+
+.inapp-start-nav-action-btn.active {
+  background-color: #059669;
+  box-shadow: 0 4px 12px rgba(5, 150, 105, 0.28);
+}
+
+.inapp-start-nav-action-btn.active:hover {
+  background-color: #047857;
+}
+
+/* 지도 상단 실시간 길안내 알림 필(Pill) */
+.map-live-guiding-pill {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1005;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #ffffff;
+  padding: 8px 14px 8px 16px;
+  border-radius: 26px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.25), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  animation: fadeInDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.live-guiding-pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background-color: #22c55e;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  animation: pulse-ring 1.8s infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+.live-guiding-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.2px;
+}
+
+.live-guiding-dest-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-guiding-stop-pill-btn {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 12px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.live-guiding-stop-pill-btn:hover {
+  background-color: #ef4444;
+  color: #ffffff;
+  border-color: #ef4444;
+}
+
+/* 실시간 길안내 토스트 메시지 */
+.map-guidance-toast {
+  position: absolute;
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1005;
+  background-color: #1e293b;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 20px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  animation: fadeInDown 0.2s ease-out;
+  pointer-events: none;
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* 길안내 시작 시 내 위치 마커 상단 배지 */
+.live-user-loc-badge {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #2563eb;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 14px;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.45);
+  border: 1.5px solid #ffffff;
+  pointer-events: none;
+  animation: fadeInDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* Live sensor data controls shared by the integrated dashboard. */
+.sensor-data-toolbar { margin: 14px auto 0; width: min(1280px, calc(100% - 32px)); padding: 14px 18px; box-sizing: border-box; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; }
+.sensor-data-toolbar p { margin: 8px 0 0; color: #64748b; font-size: 12px; line-height: 1.6; }
+.sensor-data-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sensor-data-source strong { border-radius: 6px; background: #0f172a; color: white; padding: 8px 12px; font-size: 12px; }
+.sensor-data-source span { color: #64748b; font-size: 11px; }
+.sensor-data-toolbar .sensor-data-error { color: #b91c1c; }

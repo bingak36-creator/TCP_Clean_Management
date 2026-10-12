@@ -33,7 +33,7 @@ public class UpstashHistoryReader {
         this.httpClient = httpClient;
     }
 
-    private RedisCommands<String, String> commands() {
+    private synchronized RedisCommands<String, String> commands() {
         if (connection == null) {
             RedisURI uri;
             try {
