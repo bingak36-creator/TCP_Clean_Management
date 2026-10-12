@@ -1,10 +1,13 @@
 package com.tcp.cleanmanagement.service;
 
+import com.tcp.cleanmanagement.dto.DeviceSetResponse;
 import com.tcp.cleanmanagement.dto.SensorDataRequest;
 import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.SensorMetric;
 import com.tcp.cleanmanagement.enums.MetricCode;
+import com.tcp.cleanmanagement.enums.SensorStatus;
+import com.tcp.cleanmanagement.enums.SensorType;
 import com.tcp.cleanmanagement.enums.TimeSource;
 import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
 import com.tcp.cleanmanagement.repository.SensorRepository;
@@ -21,6 +24,10 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.HashSet;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Service
@@ -30,6 +37,29 @@ public class IotDataService {
     private final SensorMetricRepository metricRepository;
     private final SensorDataRawRepository dataRepository;
     private final ApplicationEventPublisher eventPublisher;
+
+    @Transactional(readOnly = true)
+    public DeviceSetResponse getDeviceSetByMac(String mac) {
+        // The upstream demo uses one shared device set; resolve IDs by type so
+        // databases migrated from the metric-based schema remain compatible.
+        List<Sensor> sensors = sensorRepository.findAll().stream()
+                .filter(sensor -> sensor.getStatus() == SensorStatus.ACTIVE)
+                .sorted(Comparator.comparing(Sensor::getId))
+                .toList();
+        Map<String, Long> sensorMap = new HashMap<>();
+        sensors.stream().filter(sensor -> sensor.getSensorType() == SensorType.TEMP_HUMID)
+                .findFirst().ifPresent(sensor -> sensorMap.put("DHT11", sensor.getId()));
+        List<Sensor> gasSensors = sensors.stream()
+                .filter(sensor -> sensor.getSensorType() == SensorType.GAS).limit(2).toList();
+        if (!gasSensors.isEmpty()) sensorMap.put("MQ135", gasSensors.get(0).getId());
+        if (gasSensors.size() > 1) sensorMap.put("MQ7", gasSensors.get(1).getId());
+
+        return DeviceSetResponse.builder()
+                .macAddress(mac)
+                .setCode("ESP32_SET_01")
+                .sensorIds(sensorMap)
+                .build();
+    }
 
     @Transactional
     public void saveSensorData(Long sensorId, SensorDataRequest request) {

@@ -2,6 +2,7 @@ package com.tcp.cleanmanagement.controller;
 
 import com.tcp.cleanmanagement.dto.ZonePublicResponse;
 import com.tcp.cleanmanagement.dto.ZoneStatusResponse;
+import com.tcp.cleanmanagement.enums.ZoneType;
 import com.tcp.cleanmanagement.service.PublicZoneService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -15,13 +16,14 @@ import java.util.List;
 public class PublicZoneController {
     private final PublicZoneService publicZoneService;
 
-    @GetMapping("/bathrooms")
-    public ResponseEntity<List<ZonePublicResponse>> getBathrooms(
+    @GetMapping("/zones")
+    public ResponseEntity<List<ZonePublicResponse>> getZones(
+            @RequestParam(required = false) ZoneType type,
             @RequestParam(required = false) Double lat,
             @RequestParam(required = false) Double lng,
             @RequestParam(required = false, defaultValue = "2.0") Double radius) { // 기본 반경 2km
         
-        return ResponseEntity.ok(publicZoneService.getBathrooms(lat, lng, radius));
+        return ResponseEntity.ok(publicZoneService.getZones(type, lat, lng, radius));
     }
 
     @GetMapping("/zones/{zoneId}/status")

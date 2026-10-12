@@ -1,6 +1,7 @@
 package com.tcp.cleanmanagement.repository;
 
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
+import com.tcp.cleanmanagement.enums.MetricCode;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -24,4 +25,7 @@ public interface SensorDataRawRepository extends JpaRepository<SensorDataRaw, Lo
     @Modifying
     @Query("DELETE FROM SensorDataRaw d WHERE d.measuredAt < :cutoffTime")
     int deleteOlderThan(@Param("cutoffTime") LocalDateTime cutoffTime);
+
+    Optional<SensorDataRaw> findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(
+            Long zoneId, MetricCode metricCode);
 }

@@ -1,4 +1,4 @@
-version: '3.8'
+﻿version: '3.8'
 
 services:
   mysql:
@@ -47,19 +47,19 @@ services:
     networks:
       - tcp-network
 
-  # [React 프론트엔드 컨테이너]
-  # 팀원분이 frontend 폴더에 React 코드를 채워넣으시면 아래 주석을 풀고 실행하세요!
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: tcp-frontend
-  #   ports:
-  #     - "3000:80" # Nginx가 내부적으로 80번 포트를 씁니다
-  #   depends_on:
-  #     - backend
-  #   networks:
-  #     - tcp-network
+  # [React ?꾨줎?몄뿏??而⑦뀒?대꼫]
+  # ??먮텇??frontend ?대뜑??React 肄붾뱶瑜?梨꾩썙?ｌ쑝?쒕㈃ ?꾨옒 二쇱꽍???怨??ㅽ뻾?섏꽭??
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tcp-frontend
+    ports:
+      - "3000:80" # Nginx媛 ?대??곸쑝濡?80踰??ы듃瑜??곷땲??
+    depends_on:
+      - backend
+    networks:
+      - tcp-network
 
 networks:
   tcp-network:
@@ -68,3 +68,4 @@ networks:
 volumes:
   mysql-data:
   redis-data:
+

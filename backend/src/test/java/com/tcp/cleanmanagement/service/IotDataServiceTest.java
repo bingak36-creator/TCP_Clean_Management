@@ -6,6 +6,7 @@ import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.SensorMetric;
 import com.tcp.cleanmanagement.enums.MetricCode;
 import com.tcp.cleanmanagement.enums.SensorType;
+import com.tcp.cleanmanagement.enums.SensorStatus;
 import com.tcp.cleanmanagement.enums.TimeSource;
 import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
@@ -40,6 +41,22 @@ class IotDataServiceTest {
     @Mock SensorDataRawRepository dataRepository;
     @Mock ApplicationEventPublisher eventPublisher;
     @InjectMocks IotDataService service;
+
+    @Test
+    void deviceConfigurationResolvesExistingActiveSensorTypesInsteadOfFixedIds() {
+        when(sensorRepository.findAll()).thenReturn(List.of(
+                Sensor.builder().id(50L).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build(),
+                Sensor.builder().id(2L).sensorType(SensorType.TEMP_HUMID).status(SensorStatus.ERROR).build(),
+                Sensor.builder().id(21L).sensorType(SensorType.TEMP_HUMID).status(SensorStatus.ACTIVE).build(),
+                Sensor.builder().id(40L).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build()));
+
+        var response = service.getDeviceSetByMac("AA:BB:CC:DD:EE:FF");
+
+        assertEquals("AA:BB:CC:DD:EE:FF", response.getMacAddress());
+        assertEquals(21L, response.getSensorIds().get("DHT11"));
+        assertEquals(40L, response.getSensorIds().get("MQ135"));
+        assertEquals(50L, response.getSensorIds().get("MQ7"));
+    }
 
     @Test
     void splitsTemperatureAndHumidityAndConvertsDeviceTimeToUtc() {

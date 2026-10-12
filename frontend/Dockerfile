@@ -1,16 +1,18 @@
-# Stage 1: Build the React application
-FROM node:18-alpine AS build
+ï»¿# Stage 1: Build the React application
+FROM node:22-alpine AS build
 WORKDIR /app
-# ÆĞÅ°Áö ÆÄÀÏÀ» ¸ÕÀú º¹»çÇÏ¿© npm install Ä³½Ì
+# íŒ¨í‚¤ì§€ íŒŒì¼ì„ ë¨¼ì € ë³µì‚¬í•˜ì—¬ npm install ìºì‹±
 COPY package*.json ./
 RUN npm install
-# ³ª¸ÓÁö ÄÚµå º¹»ç ÈÄ ºôµå (ViteÀÇ °æ¿ì npm run build °á°ú¹°ÀÌ dist Æú´õ¿¡ »ı±æ ¼ö ÀÖÀ½)
+# ë‚˜ë¨¸ì§€ ì½”ë“œ ë³µì‚¬ í›„ ë¹Œë“œ (Viteì˜ ê²½ìš° npm run build ê²°ê³¼ë¬¼ì´ dist í´ë”ì— ìƒê¸¸ ìˆ˜ ìˆìŒ)
 COPY . .
 RUN npm run build
 
 # Stage 2: Serve with Nginx
 FROM nginx:alpine
-# ºôµåµÈ Á¤Àû ÆÄÀÏµéÀ» NginxÀÇ ±âº» ¼­ºù Æú´õ·Î º¹»çÇÕ´Ï´Ù (CRA ±âÁØ build Æú´õ)
-COPY --from=build /app/build /usr/share/nginx/html
+# ë¹Œë“œëœ ì •ì  íŒŒì¼ë“¤ì„ Nginxì˜ ê¸°ë³¸ ì„œë¹™ í´ë”ë¡œ ë³µì‚¬í•©ë‹ˆë‹¤ (CRA ê¸°ì¤€ build í´ë”)
+COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
+
+

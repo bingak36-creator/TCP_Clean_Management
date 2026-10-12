@@ -14,6 +14,8 @@ import java.util.List;
 
 @Data
 public class SensorDataRequest {
+    private String macAddress;
+
     @NotNull
     @Pattern(regexp = "[A-Za-z0-9._:-]{1,64}")
     private String sampleKey;

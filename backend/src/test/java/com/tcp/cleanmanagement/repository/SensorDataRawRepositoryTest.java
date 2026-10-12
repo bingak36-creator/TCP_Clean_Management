@@ -3,6 +3,7 @@ package com.tcp.cleanmanagement.repository;
 import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.SensorMetric;
+import com.tcp.cleanmanagement.entity.Zone;
 import com.tcp.cleanmanagement.enums.MetricCode;
 import com.tcp.cleanmanagement.enums.SensorType;
 import com.tcp.cleanmanagement.enums.TimeSource;
@@ -23,6 +24,35 @@ class SensorDataRawRepositoryTest {
     @Autowired SensorRepository sensorRepository;
     @Autowired SensorMetricRepository metricRepository;
     @Autowired SensorDataRawRepository rawRepository;
+    @Autowired ZoneRepository zoneRepository;
+
+    @Test
+    void findsLatestReadingByZoneAndMetricWithStableTimestampOrdering() {
+        Zone zone = zoneRepository.save(Zone.builder().name("Metric query test").build());
+        Zone otherZone = zoneRepository.save(Zone.builder().name("Other zone").build());
+        Sensor sensor = sensorRepository.save(Sensor.builder().zone(zone).sensorType(SensorType.GAS).build());
+        Sensor otherSensor = sensorRepository.save(Sensor.builder().zone(otherZone).sensorType(SensorType.GAS).build());
+        SensorMetric gas = metricRepository.save(SensorMetric.builder().sensor(sensor)
+                .metricCode(MetricCode.GAS).unitCode("UNVERIFIED").build());
+        SensorMetric temperature = metricRepository.save(SensorMetric.builder().sensor(sensor)
+                .metricCode(MetricCode.TEMPERATURE).unitCode("CELSIUS").build());
+        SensorMetric otherGas = metricRepository.save(SensorMetric.builder().sensor(otherSensor)
+                .metricCode(MetricCode.GAS).unitCode("UNVERIFIED").build());
+        LocalDateTime time = LocalDateTime.of(2026, 10, 12, 0, 0);
+        save(gas, "old", "10", time.minusMinutes(1));
+        save(gas, "first", "20", time);
+        save(gas, "second", "30", time);
+        save(temperature, "temp", "99", time.plusMinutes(1));
+        save(otherGas, "other", "500", time.plusMinutes(2));
+        rawRepository.flush();
+
+        SensorDataRaw latest = rawRepository
+                .findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(zone.getId(), MetricCode.GAS)
+                .orElseThrow();
+
+        assertEquals("second", latest.getSampleKey());
+        assertEquals(0, latest.getMeasuredValue().compareTo(new BigDecimal("30")));
+    }
 
     @Test
     void aggregatesEachMetricWithoutMixingReadings() {
