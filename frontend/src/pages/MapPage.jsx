@@ -4,6 +4,7 @@ import { Map, CustomOverlayMap, Polyline } from 'react-kakao-maps-sdk';
 import '../App.css'; 
 
 import { searchKakaoPlaces, fetchRoute } from '../api/searchApi';
+import { fetchBackendZones } from '../api/backendApi';
 
 // 가상의 IoT 센서 데이터 생성 함수
 const attachIoTSensorData = (places, category) => {
@@ -101,20 +102,34 @@ export default function MapPage() {
     setIsMobileSheetOpen(true);
     
     try {
+      // 1. 우리 백엔드(Spring Boot / ngrok)에서 실제 IoT 센서가 설치된 구역 목록 및 실시간 센서 데이터 조회
+      const backendZones = await fetchBackendZones(currentCategory, lat, lon);
+
+      // 2. 카카오 장소 검색 API 호출
       const keyword = queryText ? `${queryText} ${currentCategory === 'restroom' ? '화장실' : '흡연구역'}` : (currentCategory === 'restroom' ? '화장실' : '흡연구역');
-      const realPlaces = await searchKakaoPlaces(keyword, lat, lon);
-      
-      if (realPlaces && realPlaces.length > 0) {
-        if (queryText) {
-          setPosition({ lat: realPlaces[0].lat, lng: realPlaces[0].lon });
+      let kakaoPlacesWithSensors = [];
+      try {
+        const realPlaces = await searchKakaoPlaces(keyword, lat, lon);
+        if (realPlaces && realPlaces.length > 0) {
+          kakaoPlacesWithSensors = attachIoTSensorData(realPlaces.slice(0, 10), currentCategory);
         }
-        const dataWithSensors = attachIoTSensorData(realPlaces.slice(0, 15), currentCategory);
-        setSearchResults(dataWithSensors);
+      } catch (kErr) {
+        console.warn("카카오 장소 검색 생략:", kErr);
+      }
+
+      // 3. 백엔드 IoT 구역을 우선 배치하고 카카오 검색 결과와 결합
+      const combinedResults = [...backendZones, ...kakaoPlacesWithSensors];
+
+      if (combinedResults.length > 0) {
+        if (queryText) {
+          setPosition({ lat: combinedResults[0].lat, lng: combinedResults[0].lon });
+        }
+        setSearchResults(combinedResults);
       } else {
         setSearchResults([]);
       }
     } catch (error) {
-      console.error("카카오맵 검색 중 오류:", error);
+      console.error("데이터 검색 중 오류:", error);
     } finally {
       setIsLoading(false);
     }

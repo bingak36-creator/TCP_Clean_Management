@@ -53,8 +53,10 @@ public class DummyDataInitializer implements CommandLineRunner {
 
             Sensor sensor1 = Sensor.builder().zone(zone1).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build();
             Sensor sensor2 = Sensor.builder().zone(zone2).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build();
+            Sensor sensor3 = Sensor.builder().zone(zone1).sensorType(SensorType.TEMP_HUMID).status(SensorStatus.ACTIVE).build();
             sensorRepository.save(sensor1);
             sensorRepository.save(sensor2);
+            sensorRepository.save(sensor3);
 
             SensorDataRaw data1 = SensorDataRaw.builder()
                     .sensor(sensor1)
