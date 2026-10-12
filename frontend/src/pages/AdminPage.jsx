@@ -293,7 +293,7 @@ const IconClock = ({ size = 12, color = 'currentColor', style = {} }) => (
 
 // 절제된 모노크롬 / 뉴트럴 팔레트
 const STATUS_STYLES = {
-  RECEIVING: { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe', dot: '#2563eb', label: '수신 중' },
+  RECEIVING: { bg: '#eff6ff', text: '#1d4ed8', border: '#bfdbfe', dot: '#2563eb', label: '정상 수신' },
   NORMAL: {
     bg: '#f8fafc',
     text: '#334155',
@@ -341,15 +341,17 @@ const withLiveStatus = (row, t) => {
 };
 
 // 서버 스냅샷으로 갱신하되, 화면에서 기록한 청소 정보와 화면에서 등록한 구역은 30초마다 지워지지 않게 합니다.
+// 주의: 이 파일은 지도 컴포넌트를 Map이라는 이름으로 가져오므로 내장 Map을 쓰지 않습니다.
 const mergeLiveRows = (previous, liveRows) => {
-  const before = new Map(previous.map(r => [r.id, r]));
-  const liveIds = new Set(liveRows.map(r => r.id));
+  const liveIds = liveRows.map(r => r.id);
   const merged = liveRows.map(row => {
-    const old = before.get(row.id);
+    const old = previous.find(r => r.id === row.id);
     return old ? { ...row, cleanWorker: old.cleanWorker, lastCleanedHours: old.lastCleanedHours } : row;
   });
-  return [...merged, ...previous.filter(r => !r.isLive && !liveIds.has(r.id))];
+  return [...merged, ...previous.filter(r => !r.isLive && !liveIds.includes(r.id))];
 };
+
+const MONO_FONT = '"SF Mono", "Fira Code", Menlo, monospace';
 
 const genderLabel = (gender) => (gender === '공용' ? '공용' : `${gender}성용`);
 
@@ -581,13 +583,18 @@ export default function AdminPage() {
   const filteredRestrooms = accessibleRestrooms
     .filter(r => {
       if (filterFloor !== 'ALL' && r.floor !== filterFloor) return false;
-      if (filterStatus !== 'ALL' && r.status !== filterStatus) return false;
+      // '정상 수신' 필터는 화면에서 등록한 정상(NORMAL) 구역도 함께 보여줍니다.
+      const matchesStatus = filterStatus === 'ALL'
+        || r.status === filterStatus
+        || (filterStatus === 'RECEIVING' && r.status === 'NORMAL')
+        || (filterStatus === 'ALERTING' && (r.status === 'WARN' || r.status === 'DANGER'));
+      if (!matchesStatus) return false;
       return true;
     })
     .sort((a, b) => {
       if (sortOrder === 'DANGER_FIRST') {
         const rank = { DANGER: 1, WARN: 2, OFFLINE: 3, RECEIVING: 4, NORMAL: 5 };
-        return rank[a.status] - rank[b.status];
+        return (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
       }
       if (sortOrder === 'FLOOR_ASC') return a.floor.localeCompare(b.floor);
       if (sortOrder === 'NAME_ASC') return a.name.localeCompare(b.name);
@@ -613,10 +620,6 @@ export default function AdminPage() {
   const offlineCount = accessibleRestrooms.filter(r => r.status === 'OFFLINE').length;
   const uncheckedAlerts = accessibleAlerts.filter(a => !a.isChecked).length;
 
-  const getGasLabel = (val) => {
-    if (val == null) return '측정 없음';
-    return 'ADC';
-  };
 
   // 대시보드 퀵 청소 모달 오픈
   const openQuickCleaningModal = (item, e) => {
@@ -728,7 +731,7 @@ export default function AdminPage() {
       targetRestrooms = accessibleRestrooms;
       targetSummaryTitle = `전체 담당 ${accessibleRestrooms.length}개소`;
     } else {
-      const single = restrooms.find(r => r.id === dispatchTargetId);
+      const single = accessibleRestrooms.find(r => r.id === dispatchTargetId);
       targetRestrooms = single ? [single] : [];
       targetSummaryTitle = single ? single.name : '지정 구역';
     }
@@ -787,7 +790,7 @@ export default function AdminPage() {
       return;
     }
 
-    const targetRestroom = restrooms.find(r => r.id === Number(cleanFormRestroomId));
+    const targetRestroom = accessibleRestrooms.find(r => r.id === Number(cleanFormRestroomId));
     if (!targetRestroom) return;
 
     // 1. 해당 화장실 경과 시간 리셋 & 공기 정화
@@ -873,50 +876,40 @@ export default function AdminPage() {
     showToast('확인 완료되었습니다.');
   };
 
+  // 측정 시각을 x값으로 써서 수신이 끊긴 구간도 실제 시간 간격대로 보이게 합니다.
+  const historyTimes = historyPoints.map(point => new Date(point.measuredAt).getTime());
+  const historySpan = historyTimes.length > 1 ? historyTimes[historyTimes.length - 1] - historyTimes[0] : 0;
+  // 눈금이 6개 이하가 되는 가장 촘촘한 '딱 떨어지는' 간격(분)을 고릅니다.
+  const tickStepMinutes = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440].find(m => historySpan / (m * 60000) <= 6) ?? 1440;
+  const formatChartTime = (ms, withSeconds = false) => {
+    // 눈금 값의 밀리초 단위 오차로 16:10이 16:09로 보이지 않게, 눈금은 분 단위로 반올림합니다.
+    const d = new Date(withSeconds ? ms : Math.round(ms / 60000) * 60000);
+    const time = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', ...(withSeconds ? { second: '2-digit' } : {}), hourCycle: 'h23' });
+    return historySpan > 24 * 3600000 ? `${d.getMonth() + 1}/${d.getDate()} ${time}` : time;
+  };
+
   // 모노크롬 / 뉴트럴 차트 데이터
   const generateChartData = () => {
-    const labels = historyPoints.map(point => new Date(point.measuredAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
-    const tempData = historyPoints.map(point => point.temperatureC);
-    const humidData = historyPoints.map(point => point.humidityPercent);
-    const gasData = historyPoints.map(point => point.mq135Adc);
+    const series = (key) => historyPoints.map((point, i) => ({ x: historyTimes[i], y: point[key] }));
+    // 공통 선 모양: 측정점마다 점을 찍지 않고, 정수 센서값에서도 선이 튀지 않게 보간합니다.
+    const line = {
+      backgroundColor: 'transparent',
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointHitRadius: 8,
+      cubicInterpolationMode: 'monotone',
+      // 센서 한 번 읽기 실패(null)는 앞뒤를 이어 그리고, 3분 넘게 수신이 끊긴 구간만 선을 비웁니다.
+      spanGaps: true,
+      segment: {
+        borderColor: ctx => (ctx.p1.parsed.x - ctx.p0.parsed.x > 3 * 60000 ? 'transparent' : undefined)
+      }
+    };
 
     return {
-      labels,
       datasets: [
-        {
-          label: '온도 (℃)',
-          data: tempData,
-          borderColor: '#0f172a',
-          backgroundColor: 'transparent',
-          borderWidth: 2,
-          yAxisID: 'yTemp',
-          tension: 0.2,
-          pointRadius: 2,
-          pointHoverRadius: 4
-        },
-        {
-          label: '습도 (%)',
-          data: humidData,
-          borderColor: '#64748b',
-          backgroundColor: 'transparent',
-          borderWidth: 1.5,
-          yAxisID: 'yHumid',
-          tension: 0.2,
-          pointRadius: 2,
-          pointHoverRadius: 4
-        },
-        {
-          label: 'MQ-135 (ADC)',
-          data: gasData,
-          borderColor: '#94a3b8',
-          borderDash: [4, 4],
-          backgroundColor: 'transparent',
-          borderWidth: 1.5,
-          yAxisID: 'yGas',
-          tension: 0.2,
-          pointRadius: 2,
-          pointHoverRadius: 4
-        }
+        { ...line, label: '온도 (℃)', data: series('temperatureC'), borderColor: '#0f172a', borderWidth: 2, yAxisID: 'yTemp' },
+        { ...line, label: '습도 (%)', data: series('humidityPercent'), borderColor: '#64748b', borderWidth: 1.5, yAxisID: 'yHumid' },
+        { ...line, label: 'MQ-135 (ADC)', data: series('mq135Adc'), borderColor: '#94a3b8', borderDash: [4, 4], borderWidth: 1.5, yAxisID: 'yGas' }
       ]
     };
   };
@@ -930,25 +923,49 @@ export default function AdminPage() {
       legend: {
         position: 'top',
         align: 'end',
-        labels: { boxWidth: 12, font: { size: 11, weight: '500' }, color: '#64748b' }
+        labels: { usePointStyle: true, pointStyle: 'line', boxWidth: 18, font: { size: 12, weight: '500' }, color: '#475569' }
       },
       tooltip: {
         backgroundColor: '#0f172a',
         padding: 8,
         titleFont: { size: 11, weight: '600' },
         bodyFont: { size: 11 },
-        cornerRadius: 4
+        cornerRadius: 4,
+        boxPadding: 4,
+        callbacks: {
+          title: items => (items.length ? formatChartTime(items[0].parsed.x, true) : ''),
+          label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y == null ? '—' : formatReading(ctx.parsed.y)}`
+        }
       }
     },
     scales: {
-      x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 10 } } },
+      x: {
+        type: 'linear',
+        min: historyTimes[0],
+        max: historyTimes[historyTimes.length - 1],
+        grid: { display: false },
+        // 눈금을 첫 측정 시각이 아니라 현지 시각의 딱 떨어지는 지점(예: 15:30, 15:40)에 둡니다.
+        afterBuildTicks: axis => {
+          const step = tickStepMinutes * 60000;
+          const offset = new Date().getTimezoneOffset() * 60000;
+          const ticks = [];
+          for (let v = Math.ceil((axis.min - offset) / step) * step + offset; v <= axis.max; v += step) ticks.push({ value: v });
+          axis.ticks = ticks;
+        },
+        ticks: {
+          maxRotation: 0,
+          color: '#64748b',
+          font: { size: 11 },
+          callback: value => formatChartTime(value)
+        }
+      },
       yTemp: {
         type: 'linear',
         display: true,
         position: 'left',
-        title: { display: true, text: '온도 (℃)', color: '#64748b', font: { size: 10 } },
-        ticks: { color: '#94a3b8', font: { size: 10 } },
+        ticks: { color: '#64748b', font: { size: 11 }, maxTicksLimit: 5, callback: value => `${value}℃` },
         grid: { color: '#f1f5f9' },
+        border: { display: false },
         suggestedMin: 15,
         suggestedMax: 35
       },
@@ -957,14 +974,258 @@ export default function AdminPage() {
         type: 'linear',
         display: true,
         position: 'right',
-        title: { display: true, text: 'MQ-135 ADC', color: '#64748b', font: { size: 10 } },
         grid: { drawOnChartArea: false },
-        ticks: { color: '#94a3b8', font: { size: 10 } },
+        border: { display: false },
+        ticks: { color: '#64748b', font: { size: 11 }, maxTicksLimit: 5 },
         suggestedMin: 100,
         suggestedMax: 1000
       }
     }
   };
+
+  // --- [역할별 대시보드 공통 부품] ---
+  // 청소 담당자 · 현장 관리자 · 개발자 화면이 같은 모양을 쓰도록 툴바, 요약 카드, 필터, 화장실 카드, 차트, 우측 패널을 함께 씁니다.
+
+  const renderToolbar = (title, actions) => (
+    <div style={styles.toolbar}>
+      <div style={styles.toolbarTitle}>{title}</div>
+      <div style={styles.toolbarActions}>{actions}</div>
+    </div>
+  );
+
+  // filter를 주면 누를 때 그 상태만 보이고, 선택된 카드는 테두리로 표시합니다.
+  const renderSummaryCard = ({ label, value, color = '#0f172a', filter, onClick, title }) => {
+    const handleClick = onClick || (filter ? () => setFilterStatus(filter) : undefined);
+    return (
+      <div
+        key={label}
+        title={title}
+        onClick={handleClick}
+        style={{
+          ...styles.summaryCard,
+          ...(handleClick ? { cursor: 'pointer' } : {}),
+          ...(filter && filterStatus === filter ? styles.summaryCardActive : {})
+        }}
+      >
+        <span style={styles.summaryLabel}>{label}</span>
+        <div style={{ ...styles.summaryValue, color }}>{value}</div>
+      </div>
+    );
+  };
+
+  const renderFilterBar = () => (
+    <div style={styles.filterBar}>
+      <div style={styles.filterGroup}>
+        <span style={styles.filterLabel}>층별</span>
+        <select value={filterFloor} onChange={e => setFilterFloor(e.target.value)} style={styles.select}>
+          <option value="ALL">전체 구역</option>
+          {[...new Set(accessibleRestrooms.map(r => r.floor))].map(floor => <option key={floor} value={floor}>{floor}</option>)}
+        </select>
+        <span style={{ ...styles.filterLabel, marginLeft: '16px' }}>상태</span>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={styles.select}>
+          <option value="ALL">전체 상태</option>
+          <option value="RECEIVING">정상 수신</option>
+          <option value="ALERTING">주의·위험</option>
+          <option value="WARN">주의</option>
+          <option value="DANGER">위험</option>
+          <option value="OFFLINE">오프라인</option>
+        </select>
+      </div>
+      <div style={styles.filterGroup}>
+        <span style={styles.filterLabel}>정렬</span>
+        <select value={sortOrder} onChange={e => setSortOrder(e.target.value)} style={styles.select}>
+          <option value="DANGER_FIRST">위험/주의 우선</option>
+          <option value="FLOOR_ASC">층수 오름차순</option>
+          <option value="NAME_ASC">이름순</option>
+        </select>
+      </div>
+    </div>
+  );
+
+  // 화장실 카드의 머리·측정값은 모든 역할이 같고, 아래 footer만 역할마다 다릅니다.
+  const renderRestroomCard = (item, footer, { sub, selectable = true } = {}) => {
+    const isSelected = selectable && selectedRestroom?.id === item.id;
+    const st = statusStyle(item.status);
+
+    return (
+      <div
+        key={item.id}
+        onClick={selectable ? () => setSelectedRestroom(item) : undefined}
+        style={{
+          ...styles.restroomCard,
+          cursor: selectable ? 'pointer' : 'default',
+          ...(isSelected ? { border: '1px solid #0f172a', boxShadow: '0 0 0 1px #0f172a' } : {})
+        }}
+      >
+        <div style={styles.cardHeader}>
+          <div style={{ minWidth: 0 }}>
+            <div style={styles.cardTitle} title={item.name}>{item.name}</div>
+            <div style={styles.cardSub}>{sub ?? `${item.floor} · ${genderLabel(item.gender)}`}</div>
+          </div>
+          <span style={{ ...styles.statusPill, backgroundColor: st.bg, color: st.text, border: `1px solid ${st.border}` }}>
+            <span style={{ ...styles.pillDot, backgroundColor: st.dot }} />
+            {st.label}
+          </span>
+        </div>
+
+        <div style={styles.metricsBox}>
+          <div style={styles.metricRow}>
+            <span style={styles.metricName}>실내 온도</span>
+            <span style={styles.metricVal}>
+              {formatReading(item.temp)}
+              <span style={styles.unitText}>℃</span>
+            </span>
+          </div>
+          <div style={styles.metricRow}>
+            <span style={styles.metricName}>실내 습도</span>
+            <span style={styles.metricVal}>
+              {formatReading(item.humidity)}
+              <span style={styles.unitText}>%</span>
+            </span>
+          </div>
+          <div style={styles.metricRow}>
+            <span style={styles.metricName}>MQ-135</span>
+            <span style={{ ...styles.metricVal, color: item.gas >= thresholds.gasWarn ? '#dc2626' : '#0f172a' }}>
+              {formatReading(item.gas)}
+              <span style={styles.unitText}>ADC</span>
+            </span>
+          </div>
+        </div>
+
+        {footer}
+      </div>
+    );
+  };
+
+  const renderRestroomGrid = (list, renderFooter, { minCardWidth, selectable = true, sub } = {}) => (
+    list.length === 0 ? (
+      <div style={{ ...styles.panelCard, ...styles.panelEmpty }}>
+        {dataLoading ? '센서 데이터를 불러오는 중입니다…' : accessibleRestrooms.length === 0 ? '담당 구역에 연결된 센서가 없습니다.' : '조건에 맞는 구역이 없습니다.'}
+      </div>
+    ) : (
+      <div style={{ ...styles.restroomGrid, ...(minCardWidth ? { gridTemplateColumns: `repeat(auto-fill, minmax(${minCardWidth}px, 1fr))` } : {}) }}>
+        {list.map(item => renderRestroomCard(item, renderFooter(item), { selectable, sub: sub?.(item) }))}
+      </div>
+    )
+  );
+
+  // 선택한 구역의 추이 차트: 오른쪽 패널 아래까지 전체 폭으로 넓게 그립니다.
+  const renderHistoryChart = (subText) => {
+    if (!selectedRestroom) return null;
+    const st = statusStyle(selectedRestroom.status);
+    return (
+      <div style={{ ...styles.chartPanel, marginTop: '16px' }}>
+        <div style={styles.chartHeader}>
+          <div style={{ minWidth: 0 }}>
+            <h3 style={styles.chartTitle}>
+              <IconTrend /> <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{selectedRestroom.name} 실시간 환경 추이</span>
+              <span style={{ ...styles.statusPillSmall, marginLeft: '8px', flexShrink: 0, backgroundColor: st.bg, color: st.text, border: `1px solid ${st.border}` }}>
+                {st.label}
+              </span>
+            </h3>
+            <span style={styles.chartSub}>{subText}</span>
+          </div>
+          <div style={styles.rangeTabs}>
+            {['1h', '6h', '24h', '7d'].map(range => (
+              <button
+                key={range}
+                onClick={() => setChartRange(range)}
+                style={{ ...styles.rangeBtn, ...(chartRange === range ? styles.rangeBtnActive : {}) }}
+              >
+                {range === '1h' ? '1시간' : range === '6h' ? '6시간' : range === '24h' ? '24시간' : '7일'}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* Chart.js가 창 크기 변화를 따라가려면 컨테이너가 relative여야 합니다. */}
+        <div style={{ position: 'relative', height: '280px', width: '100%', minWidth: 0 }}>
+          <Line data={generateChartData()} options={chartOptions} />
+        </div>
+        {historyPoints.length === 0 && (
+          <p style={{ margin: '8px 0 0', fontSize: '13px', color: '#64748b', textAlign: 'center' }}>
+            불러오는 중이거나 선택한 기간의 MySQL 실측 이력이 없습니다.
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  const confirmAccessibleAlerts = () => {
+    setAlerts(prev => prev.map(a => accessibleAlerts.some(acc => acc.id === a.id) ? { ...a, isChecked: true } : a));
+    showToast('담당 구역 알림이 일괄 확인되었습니다.');
+  };
+
+  const renderAlertPanel = () => (
+    <div style={styles.panelCard}>
+      <div style={styles.panelHeader}>
+        <h3 style={styles.panelTitle}>최근 현장 알림</h3>
+        <button onClick={() => setActiveTab('alerts')} style={styles.panelLink}>전체 보기 &rarr;</button>
+      </div>
+      <div style={styles.alertList}>
+        {accessibleAlerts.length === 0 ? (
+          <div style={styles.panelEmpty}>담당 구역의 알림 내역이 없습니다.</div>
+        ) : (
+          accessibleAlerts.slice(0, 6).map(alert => {
+            const st = statusStyle(alert.level);
+            return (
+              <div key={alert.id} style={styles.alertItem}>
+                <div style={styles.alertTop}>
+                  <span style={styles.alertTime}>{alert.time}</span>
+                  <span style={styles.alertRestroom}>{alert.restroom}</span>
+                  <span style={{ ...styles.statusPillSmall, backgroundColor: st.bg, color: st.text, border: `1px solid ${st.border}` }}>
+                    {alert.metric}
+                  </span>
+                </div>
+                <div style={styles.alertBottom}>
+                  <span style={styles.alertMemo}>{alert.memo}</span>
+                  {!alert.isChecked ? (
+                    <button onClick={(e) => handleCheckAlert(alert.id, e)} style={styles.checkBtn}>확인</button>
+                  ) : (
+                    <span style={styles.checkedText}>완료</span>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+
+  const renderCleaningPanel = () => (
+    <div style={styles.panelCard}>
+      <div style={styles.panelHeader}>
+        <h3 style={styles.panelTitle}>구역별 청소 현황</h3>
+        <button onClick={() => setActiveTab('cleaning')} style={styles.panelLink}>전체 보기 &rarr;</button>
+      </div>
+      {accessibleRestrooms.length === 0 ? (
+        <div style={styles.panelEmpty}>담당 구역이 없습니다.</div>
+      ) : (
+        <div style={styles.cleaningList}>
+          {accessibleRestrooms.map(r => {
+            const isOver = r.lastCleanedHours >= systemSettings.cleanWarnHours;
+            return (
+              <div key={r.id} style={styles.cleaningRow}>
+                <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={styles.cleaningName}>{r.name}</span>
+                  <span style={{ fontSize: '12px', color: '#64748b', marginLeft: '6px' }}>({r.cleanWorker})</span>
+                </div>
+                <span style={{ fontSize: '12px', fontWeight: '500', color: isOver ? '#991b1b' : '#64748b', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {isOver ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                      <IconAlertCircle size={12} /> {r.lastCleanedHours}h 지연
+                    </span>
+                  ) : (
+                    r.lastCleanedHours == null ? '기록 없음' : `${r.lastCleanedHours}h 전`
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 
   // --- [청소 담당자 전용 대시보드 화면] ---
   const renderCleanerDashboard = () => {
@@ -973,333 +1234,122 @@ export default function AdminPage() {
     const checklistTotal = Object.keys(cleanChecklist).length;
     const checklistPercent = Math.round((checklistCompleted / checklistTotal) * 100);
 
+    // 청소 담당자는 카드에서 바로 작업을 기록합니다. (버튼 모양은 다른 역할과 같은 공통 버튼)
+    const cleanerFooter = (item) => {
+      const isOver = item.lastCleanedHours >= systemSettings.cleanWarnHours;
+      const cleaningText = isOver
+        ? `청소 ${item.lastCleanedHours}시간 경과 (기준 초과)`
+        : item.lastCleanedHours == null ? '청소 기록 없음' : `청소 ${item.lastCleanedHours}시간 전 · ${item.cleanWorker}`;
+      return (
+        <div style={{ ...styles.cardFooter, flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
+          <span style={{ fontSize: '12px', color: isOver ? '#b91c1c' : '#475569', fontWeight: isOver ? '600' : '400', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {cleaningText}
+          </span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+            <button onClick={() => handleQuickActionClean(item, '정기 청소', '바닥 물청소 및 변기 살균 완료')} style={{ ...styles.primaryBtn, backgroundColor: '#059669' }}>
+              <IconZap size={13} /> 청소 완료
+            </button>
+            <button onClick={() => handleQuickActionClean(item, '위생 소독', '세면대 및 변기 알코올 소독제 살포')} style={styles.secondaryBtn}>
+              <IconShieldCheck size={13} /> 소독 완료
+            </button>
+            <button onClick={() => handleQuickActionClean(item, '비품 보충', '화장지 롤 및 물비누 잔량 보충 완료')} style={styles.secondaryBtn}>
+              <IconPackage size={13} /> 비품 보충
+            </button>
+            <button onClick={(e) => openQuickCleaningModal(item, e)} style={styles.secondaryBtn}>
+              <IconFileText size={13} /> 메모 작성
+            </button>
+          </div>
+        </div>
+      );
+    };
+
     return (
       <div style={{ marginTop: '16px' }}>
-        {/* 청소 요약 카드 (현장 위생 중심) */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
-          <div style={{ ...styles.summaryCard, borderLeft: '4px solid #059669' }}>
-            <span style={styles.summaryLabel}>내 담당 구역</span>
-            <div style={{ fontSize: '20px', fontWeight: '700', color: '#0f172a', marginTop: '4px' }}>
-              {accessibleRestrooms.length}개소 <span style={{ fontSize: '12px', fontWeight: '500', color: '#64748b' }}>(연결된 센서 기준)</span>
-            </div>
-          </div>
+        {renderToolbar(
+          <><IconRoleCleaner size={15} color="#059669" /> 담당 구역 위생 관리</>,
+          <>
+            <button onClick={() => setActiveTab('cleaning')} style={{ ...styles.primaryBtn, backgroundColor: '#059669' }}>
+              <IconFileText size={13} /> 청소 기록 관리
+            </button>
+            <button onClick={confirmAccessibleAlerts} style={styles.secondaryBtn}>
+              <IconCheckCheck size={13} /> 담당 알림 일괄 확인
+            </button>
+          </>
+        )}
 
-          <div style={{ ...styles.summaryCard, borderLeft: delayedCount > 0 ? '4px solid #dc2626' : '4px solid #059669' }}>
-            <span style={styles.summaryLabel}>즉시 청소 필요</span>
-            <div style={{ fontSize: '20px', fontWeight: '700', color: delayedCount > 0 ? '#dc2626' : '#059669', marginTop: '4px' }}>
-              {delayedCount}개소 {delayedCount > 0 && <span style={{ fontSize: '11px', fontWeight: '600', color: '#dc2626' }}>(기준 초과)</span>}
-            </div>
-          </div>
-
-          <div style={{ ...styles.summaryCard, borderLeft: '4px solid #2563eb' }}>
-            <span style={styles.summaryLabel}>오늘 완료 청소</span>
-            <div style={{ fontSize: '20px', fontWeight: '700', color: '#2563eb', marginTop: '4px' }}>
-              {accessibleCleaningLogs.length}건 <span style={{ fontSize: '12px', fontWeight: '500', color: '#64748b' }}>(이력 기록됨)</span>
-            </div>
-          </div>
-
-          <div style={{ ...styles.summaryCard, borderLeft: '4px solid #d97706' }}>
-            <span style={styles.summaryLabel}>내 구역 알림</span>
-            <div style={{ fontSize: '20px', fontWeight: '700', color: '#d97706', marginTop: '4px' }}>
-              {uncheckedAlerts}건 <span style={{ fontSize: '12px', fontWeight: '500', color: '#64748b' }}>(미확인)</span>
-            </div>
-          </div>
+        <div style={styles.summaryGrid}>
+          {renderSummaryCard({ label: '내 담당 구역', value: accessibleRestrooms.length })}
+          {renderSummaryCard({ label: `즉시 청소 필요 (${systemSettings.cleanWarnHours}시간 초과)`, value: delayedCount, color: delayedCount > 0 ? '#dc2626' : '#0f172a' })}
+          {renderSummaryCard({ label: '완료한 청소', value: accessibleCleaningLogs.length })}
+          {renderSummaryCard({ label: '오늘 점검 진행', value: `${checklistPercent}%`, color: checklistPercent === 100 ? '#059669' : '#0f172a' })}
+          {renderSummaryCard({ label: '미확인 알림', value: uncheckedAlerts, color: uncheckedAlerts > 0 ? '#d97706' : '#0f172a', onClick: () => setActiveTab('alerts') })}
         </div>
 
-        {/* 대형 화장실 위생 및 원클릭 작업 카드 */}
-        <div style={{ marginBottom: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <h3 style={{ margin: 0, fontSize: '14px', fontWeight: '700', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <IconRoleCleaner size={16} /> 담당 화장실 실시간 위생 현황 및 즉시 조치
-            </h3>
-            <span style={{ fontSize: '12px', color: '#64748b' }}>
-              청소 완료 및 소독 기록을 화면에서 시연할 수 있습니다.
-            </span>
+        <div style={styles.dashboardBody}>
+          <div style={styles.leftCol}>
+            {renderRestroomGrid(accessibleRestrooms, cleanerFooter, { minCardWidth: 280, selectable: false })}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '16px' }}>
-            {accessibleRestrooms.map(item => {
-              const isOver = item.lastCleanedHours >= systemSettings.cleanWarnHours;
-              const gasLabel = getGasLabel(item.gas);
-
-              return (
-                <div
-                  key={item.id}
-                  style={{
-                    backgroundColor: '#ffffff',
-                    borderRadius: '12px',
-                    border: isOver ? '2px solid #fca5a5' : '1px solid #e2e8f0',
-                    padding: '20px',
-                    boxShadow: isOver ? '0 4px 12px rgba(239, 68, 68, 0.08)' : '0 2px 6px rgba(0,0,0,0.03)'
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <h4 style={{ margin: 0, fontSize: '17px', fontWeight: '700', color: '#0f172a' }}>{item.name}</h4>
-                        <span style={{ padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: '600', backgroundColor: '#f1f5f9', color: '#475569' }}>
-                          {item.gender === '공용' ? '공용' : `${item.gender}성용`}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
-                        기기 식별: {item.deviceId} &middot; {item.floor}
-                      </div>
-                    </div>
-
-                    <div style={{
-                      padding: '5px 12px',
-                      borderRadius: '16px',
-                      fontSize: '12px',
-                      fontWeight: '700',
-                      backgroundColor: isOver ? '#fef2f2' : item.status === 'WARN' ? '#fffbeb' : '#f0fdf4',
-                      color: isOver ? '#b91c1c' : item.status === 'WARN' ? '#b45309' : '#15803d',
-                      border: `1px solid ${isOver ? '#fecaca' : item.status === 'WARN' ? '#fde68a' : '#bbf7d0'}`
-                    }}>
-                      {item.isLive ? <span>{STATUS_STYLES[item.status].label}</span> : isOver ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <IconAlertCircle size={12} /> 청소 요망
-                        </span>
-                      ) : item.status === 'WARN' ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <IconAlertCircle size={12} /> 냄새 주의
-                        </span>
-                      ) : (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <IconCheckCircle size={12} /> 쾌적/청결
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 위생 지표 & 청소 경과 시간 */}
-                  <div style={{ backgroundColor: isOver ? '#fff5f5' : '#f8fafc', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '12px', color: '#64748b' }}>마지막 청소</span>
-                      <strong style={{ fontSize: '13px', color: isOver ? '#dc2626' : '#0f172a' }}>
-                        {isOver ? (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                            <IconAlertCircle size={13} /> {item.lastCleanedHours}시간 경과 (기준 초과)
-                          </span>
-                        ) : (
-                          item.lastCleanedHours == null ? '청소 기록 없음' : `${item.lastCleanedHours}시간 전 (${item.cleanWorker || '미등록'})`
-                        )}
-                      </strong>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', paddingTop: '8px', borderTop: '1px solid #e2e8f0' }}>
-                      <div style={{ textAlign: 'center' }}>
-                        <span style={{ fontSize: '10px', color: '#94a3b8' }}>MQ-135 ADC</span>
-                        <div style={{ fontSize: '12px', fontWeight: '600', color: item.gas > thresholds.gasWarn ? '#dc2626' : '#334155' }}>
-                          {gasLabel} ({formatReading(item.gas)})
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'center' }}>
-                        <span style={{ fontSize: '10px', color: '#94a3b8' }}>실내 온도</span>
-                        <div style={{ fontSize: '12px', fontWeight: '600', color: '#334155' }}>{formatReading(item.temp)}℃</div>
-                      </div>
-                      <div style={{ textAlign: 'center' }}>
-                        <span style={{ fontSize: '10px', color: '#94a3b8' }}>실내 습도</span>
-                        <div style={{ fontSize: '12px', fontWeight: '600', color: '#334155' }}>{formatReading(item.humidity)}%</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 청소 담당자 원클릭 실행 버튼 */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
-                    <button
-                      onClick={() => handleQuickActionClean(item, '정기 청소', '바닥 물청소 및 변기 살균 완료')}
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        backgroundColor: '#059669',
-                        color: '#ffffff',
-                        fontSize: '12px',
-                        fontWeight: '700',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <IconZap size={14} /> 즉시 청소 완료
-                    </button>
-
-                    <button
-                      onClick={() => handleQuickActionClean(item, '위생 소독', '세면대 및 변기 알코올 소독제 살포')}
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: '6px',
-                        border: '1px solid #cbd5e1',
-                        backgroundColor: '#ffffff',
-                        color: '#0f172a',
-                        fontSize: '12px',
-                        fontWeight: '600',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '6px'
-                      }}
-                    >
-                      <IconShieldCheck size={14} /> 소독/방역 완료
-                    </button>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                    <button
-                      onClick={() => handleQuickActionClean(item, '비품 보충', '화장지 롤 및 물비누 잔량 보충 완료')}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid #e2e8f0',
-                        backgroundColor: '#f8fafc',
-                        color: '#475569',
-                        fontSize: '11px',
-                        fontWeight: '600',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '5px'
-                      }}
-                    >
-                      <IconPackage size={13} /> 휴지/비누 보충
-                    </button>
-
-                    <button
-                      onClick={(e) => openQuickCleaningModal(item, e)}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid #e2e8f0',
-                        backgroundColor: '#f8fafc',
-                        color: '#475569',
-                        fontSize: '11px',
-                        fontWeight: '600',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '5px'
-                      }}
-                    >
-                      <IconFileText size={13} /> 세부 메모 작성
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* 하단 2열: 체크리스트 & 내 구역 알림 및 작업 로그 */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px' }}>
-          {/* 오늘의 위생 점검 체크리스트 */}
-          <div style={styles.panelCard}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', borderBottom: '1px solid #f1f5f9', paddingBottom: '8px' }}>
-              <div>
-                <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '700', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <IconCheckSquare size={15} /> 오늘의 위생 점검 체크리스트
-                </h4>
-                <span style={{ fontSize: '11px', color: '#64748b' }}>현장 순찰 시 항목별로 클릭하여 완료 처리합니다.</span>
+          <aside style={styles.rightCol}>
+            {/* 오늘의 위생 점검 체크리스트 */}
+            <div style={styles.panelCard}>
+              <div style={styles.panelHeader}>
+                <h3 style={{ ...styles.panelTitle, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <IconCheckSquare size={14} /> 오늘의 위생 점검
+                </h3>
+                <span style={{ fontSize: '12px', fontWeight: '700', color: '#059669', whiteSpace: 'nowrap' }}>
+                  {checklistCompleted}/{checklistTotal} &middot; {checklistPercent}%
+                </span>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <span style={{ fontSize: '14px', fontWeight: '700', color: '#059669' }}>{checklistPercent}%</span>
-                <span style={{ fontSize: '11px', color: '#64748b' }}> ({checklistCompleted}/{checklistTotal})</span>
+              <div style={{ width: '100%', height: '6px', backgroundColor: '#e2e8f0', borderRadius: '4px', marginBottom: '12px', overflow: 'hidden' }}>
+                <div style={{ width: `${checklistPercent}%`, height: '100%', backgroundColor: '#059669', transition: 'width 0.3s ease' }} />
               </div>
-            </div>
-
-            {/* 프로그레스 바 */}
-            <div style={{ width: '100%', height: '6px', backgroundColor: '#e2e8f0', borderRadius: '3px', marginBottom: '14px', overflow: 'hidden' }}>
-              <div style={{ width: `${checklistPercent}%`, height: '100%', backgroundColor: '#059669', transition: 'width 0.3s ease' }} />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {[
-                { key: 'floor', label: '바닥 물청소 및 미끄럼 방지 건조 작업' },
-                { key: 'sink', label: '세면대 물때 제거 및 거울 소독' },
-                { key: 'toilet', label: '대변기 / 소변기 살균 세정제 투입' },
-                { key: 'soap', label: '화장지, 물비누, 손소독제 잔량 보충' },
-                { key: 'trash', label: '쓰레기통 비움 및 비닐봉투 교체' },
-                { key: 'vent', label: '환풍기 정상 가동 확인 및 방향제 점검' }
-              ].map(chk => (
-                <label
-                  key={chk.key}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    backgroundColor: cleanChecklist[chk.key] ? '#f0fdf4' : '#f8fafc',
-                    border: `1px solid ${cleanChecklist[chk.key] ? '#bbf7d0' : '#e2e8f0'}`,
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    color: cleanChecklist[chk.key] ? '#166534' : '#334155'
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={cleanChecklist[chk.key]}
-                    onChange={() => toggleChecklistItem(chk.key)}
-                    style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-                  />
-                  <span style={{ textDecoration: cleanChecklist[chk.key] ? 'line-through' : 'none', flex: 1 }}>
-                    {chk.label}
-                  </span>
-                  {cleanChecklist[chk.key] && <span style={{ fontSize: '11px', fontWeight: '700', color: '#059669' }}>완료</span>}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* 내 구역 최근 알림 및 최근 청소 이력 */}
-          <div style={styles.panelCard}>
-            <div style={{ borderBottom: '1px solid #f1f5f9', paddingBottom: '8px', marginBottom: '12px' }}>
-              <h4 style={{ margin: 0, fontSize: '14px', fontWeight: '700', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <IconBell size={15} /> 내 구역 현장 알림 & 최근 조치 내역
-              </h4>
-              <span style={{ fontSize: '11px', color: '#64748b' }}>담당 구역에서 발생한 알림을 확인하고 조치합니다.</span>
-            </div>
-
-            <div style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '6px' }}>미확인 위생 알림 ({uncheckedAlerts}건)</div>
-              {accessibleAlerts.filter(a => !a.isChecked).length === 0 ? (
-                <div style={{ padding: '12px', backgroundColor: '#f0fdf4', borderRadius: '6px', fontSize: '12px', color: '#166534', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                  <IconCheckCircle size={14} color="#166534" /> 현재 조치 대기 중인 이상 알림이 없습니다.
-                </div>
-              ) : (
-                accessibleAlerts.filter(a => !a.isChecked).slice(0, 3).map(a => (
-                  <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', backgroundColor: '#fff5f5', border: '1px solid #fecaca', borderRadius: '6px', marginBottom: '6px' }}>
-                    <div>
-                      <div style={{ fontSize: '12px', fontWeight: '600', color: '#b91c1c' }}>[{a.restroom}] {a.metric} 이상 ({a.value})</div>
-                      <div style={{ fontSize: '11px', color: '#7f1d1d' }}>{a.memo} &middot; {a.time}</div>
-                    </div>
-                    <button onClick={(e) => handleCheckAlert(a.id, e)} style={{ ...styles.checkBtn, backgroundColor: '#dc2626', color: '#fff' }}>
-                      확인/조치
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '6px' }}>최근 등록된 청소 이력</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {accessibleCleaningLogs.slice(0, 4).map(log => (
-                  <div key={log.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', backgroundColor: '#f8fafc', borderRadius: '6px', fontSize: '12px' }}>
-                    <div>
-                      <span style={{ fontWeight: '600', color: '#0f172a' }}>{log.restroomName}</span>
-                      <span style={{ marginLeft: '6px', padding: '1px 6px', backgroundColor: '#e2e8f0', borderRadius: '4px', fontSize: '10px' }}>{log.type}</span>
-                    </div>
-                    <span style={{ fontSize: '11px', color: '#64748b' }}>{log.time}</span>
-                  </div>
-                ))}
+                {[
+                  { key: 'floor', label: '바닥 물청소·건조' },
+                  { key: 'sink', label: '세면대·거울 소독' },
+                  { key: 'toilet', label: '변기 살균 세정' },
+                  { key: 'soap', label: '휴지·비누·소독제 보충' },
+                  { key: 'trash', label: '쓰레기통 비움·봉투 교체' },
+                  { key: 'vent', label: '환풍기·방향제 점검' }
+                ].map(chk => {
+                  const done = cleanChecklist[chk.key];
+                  return (
+                    <label
+                      key={chk.key}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '7px 10px',
+                        borderRadius: '6px',
+                        backgroundColor: done ? '#f0fdf4' : '#f8fafc',
+                        border: `1px solid ${done ? '#bbf7d0' : '#e2e8f0'}`,
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        color: done ? '#166534' : '#334155',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={done}
+                        onChange={() => toggleChecklistItem(chk.key)}
+                        style={{ width: '15px', height: '15px', margin: 0, cursor: 'pointer' }}
+                      />
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: done ? 'line-through' : 'none' }}>
+                        {chk.label}
+                      </span>
+                      {done && <IconCheckCircle size={13} color="#059669" />}
+                    </label>
+                  );
+                })}
               </div>
             </div>
-          </div>
+
+            {renderAlertPanel()}
+            {renderCleaningPanel()}
+          </aside>
         </div>
       </div>
     );
@@ -1309,391 +1359,136 @@ export default function AdminPage() {
   const renderAdminDashboard = () => {
     const delayedCount = accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours).length;
 
+    const adminFooter = (item) => {
+      const isOver = item.lastCleanedHours >= systemSettings.cleanWarnHours;
+      return (
+        <div style={styles.cardFooter}>
+          <span style={{ fontSize: '12px', color: isOver ? '#b91c1c' : '#475569', fontWeight: isOver ? '600' : '400', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            청소 경과: {isOver ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                <IconAlertCircle size={11} /> {item.lastCleanedHours}시간 경과
+              </span>
+            ) : (
+              item.lastCleanedHours == null ? '청소 기록 없음' : `${item.lastCleanedHours}시간 전`
+            )} ({item.cleanWorker})
+          </span>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            {isOver && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleOpenDispatchModal(item.id);
+                }}
+                style={{ ...styles.quickCleanBtn, backgroundColor: '#fef2f2', color: '#dc2626', borderColor: '#fecaca' }}
+                title="담당 미화 인원 지정 출동 지시"
+              >
+                <IconMegaphone size={11} /> 출동 지시
+              </button>
+            )}
+            <button onClick={(e) => openQuickCleaningModal(item, e)} style={styles.quickCleanBtn}>
+              청소 등록
+            </button>
+          </div>
+        </div>
+      );
+    };
+
     return (
       <div style={{ marginTop: '16px' }}>
-        {/* 관리자 퀵 액션 툴바 */}
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '12px 18px',
-          backgroundColor: '#ffffff',
-          borderRadius: '8px',
-          border: '1px solid #e2e8f0',
-          marginBottom: '16px',
-          boxShadow: '0 1px 2px rgba(0,0,0,0.02)'
-        }}>
-          <div style={{ fontSize: '13px', fontWeight: '600', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <IconRoleAdmin size={15} color="#2563eb" /> 현장 관리자 운영 컨트롤
-          </div>
-
-          <div style={{ display: 'flex', gap: '8px' }}>
+        {renderToolbar(
+          <><IconRoleAdmin size={15} color="#2563eb" /> 현장 관리자 운영 컨트롤</>,
+          <>
             <button
               onClick={() => handleOpenDispatchModal('ALL_DELAYED')}
-              style={{
-                padding: '6px 12px',
-                borderRadius: '6px',
-                border: 'none',
-                backgroundColor: delayedCount > 0 ? '#dc2626' : '#2563eb',
-                color: '#ffffff',
-                fontSize: '12px',
-                fontWeight: '600',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: delayedCount > 0 ? '0 1px 3px rgba(220,38,38,0.3)' : '0 1px 2px rgba(37,99,235,0.2)'
-              }}
+              style={{ ...styles.primaryBtn, backgroundColor: delayedCount > 0 ? '#dc2626' : '#2563eb' }}
             >
               <IconMegaphone size={13} /> 청소 지연 구역 출동 지시 {delayedCount > 0 && `(${delayedCount}개소)`}
             </button>
-
-            <button
-              onClick={() => {
-                setAlerts(prev => prev.map(a => accessibleAlerts.some(acc => acc.id === a.id) ? { ...a, isChecked: true } : a));
-                showToast('담당 구역 알림이 일괄 확인되었습니다.');
-              }}
-              style={styles.secondaryBtn}
-            >
+            <button onClick={confirmAccessibleAlerts} style={styles.secondaryBtn}>
               <IconCheckCheck size={13} /> 담당 알림 일괄 확인
             </button>
-
             <button
               onClick={() => {
                 setActiveTab('settings');
                 setSettingsSubTab('thresholds');
               }}
-              style={{
-                ...styles.secondaryBtn,
-                backgroundColor: '#f1f5f9'
-              }}
+              style={{ ...styles.secondaryBtn, backgroundColor: '#f1f5f9' }}
             >
-              <IconSliders size={13} /> 환경 임계값 조정 바로가기
+              <IconSliders size={13} /> 환경 임계값 설정
             </button>
-          </div>
-        </div>
+          </>
+        )}
 
-        {/* 관리자 요약 카드 5종 */}
         <div style={styles.summaryGrid}>
-          <div style={{ ...styles.summaryCard, cursor: 'pointer' }} onClick={() => setFilterStatus('ALL')}>
-            <span style={styles.summaryLabel}>연결된 관리 구역</span>
-            <div style={styles.summaryValue}>{totalCount}</div>
-          </div>
-          <div style={{ ...styles.summaryCard, cursor: 'pointer' }} onClick={() => setFilterStatus('NORMAL')}>
-            <span style={styles.summaryLabel}>실측 수신</span>
-            <div style={styles.summaryValue}>{normalCount}</div>
-          </div>
-          <div style={{ ...styles.summaryCard, cursor: 'pointer' }} onClick={() => setFilterStatus('WARN')}>
-            <span style={styles.summaryLabel}>주의/위험</span>
-            <div style={{ ...styles.summaryValue, color: (warnCount + dangerCount > 0) ? '#dc2626' : '#0f172a' }}>
-              {warnCount + dangerCount}
-            </div>
-          </div>
-          <div
-            style={{ ...styles.summaryCard, cursor: 'pointer' }}
-            onClick={() => handleOpenDispatchModal('ALL_DELAYED')}
-            title="클릭하여 청소 지연 구역 출동 지시 발령"
-          >
-            <span style={styles.summaryLabel}>청소 지연 (8시간 초과)</span>
-            <div style={{ ...styles.summaryValue, color: delayedCount > 0 ? '#dc2626' : '#0f172a' }}>
-              {delayedCount}
-            </div>
-          </div>
-          <div style={{ ...styles.summaryCard, cursor: 'pointer' }} onClick={() => setActiveTab('alerts')}>
-            <span style={styles.summaryLabel}>미확인 현장 알림</span>
-            <div style={{ ...styles.summaryValue, color: uncheckedAlerts > 0 ? '#d97706' : '#0f172a' }}>
-              {uncheckedAlerts}
-            </div>
-          </div>
+          {renderSummaryCard({ label: '연결된 관리 구역', value: totalCount, filter: 'ALL' })}
+          {renderSummaryCard({ label: '정상 수신', value: normalCount, filter: 'RECEIVING' })}
+          {renderSummaryCard({ label: '주의/위험', value: warnCount + dangerCount, color: warnCount + dangerCount > 0 ? '#dc2626' : '#0f172a', filter: 'ALERTING' })}
+          {renderSummaryCard({
+            label: `청소 지연 (${systemSettings.cleanWarnHours}시간 초과)`,
+            value: delayedCount,
+            color: delayedCount > 0 ? '#dc2626' : '#0f172a',
+            onClick: () => handleOpenDispatchModal('ALL_DELAYED'),
+            title: '클릭하여 청소 지연 구역 출동 지시 발령'
+          })}
+          {renderSummaryCard({ label: '미확인 현장 알림', value: uncheckedAlerts, color: uncheckedAlerts > 0 ? '#d97706' : '#0f172a', onClick: () => setActiveTab('alerts') })}
         </div>
 
-        {/* 필터 바 */}
-        <div style={styles.filterBar}>
-          <div style={styles.filterGroup}>
-            <span style={styles.filterLabel}>층별</span>
-            <select value={filterFloor} onChange={e => setFilterFloor(e.target.value)} style={styles.select}>
-              <option value="ALL">전체 구역</option>
-              {[...new Set(accessibleRestrooms.map(r => r.floor))].map(floor => <option key={floor} value={floor}>{floor}</option>)}
-            </select>
-            <span style={{ ...styles.filterLabel, marginLeft: '16px' }}>상태</span>
-            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={styles.select}>
-              <option value="ALL">전체 상태</option>
-              <option value="RECEIVING">수신 중</option>
-              <option value="NORMAL">정상</option>
-              <option value="WARN">주의</option>
-              <option value="DANGER">위험</option>
-            </select>
-          </div>
-          <div style={styles.filterGroup}>
-            <span style={styles.filterLabel}>정렬</span>
-            <select value={sortOrder} onChange={e => setSortOrder(e.target.value)} style={styles.select}>
-              <option value="DANGER_FIRST">위험/주의 우선</option>
-              <option value="FLOOR_ASC">층수 오름차순</option>
-              <option value="NAME_ASC">이름순</option>
-            </select>
-          </div>
-        </div>
+        {renderFilterBar()}
 
-        {/* 중앙 2열: 카드 그리드 + 환경 추이 차트 / 우측 패널 */}
+        {/* 중앙 2열: 카드 그리드 / 우측 패널 */}
         <div style={styles.dashboardBody}>
           <div style={styles.leftCol}>
-            <div style={styles.restroomGrid}>
-              {filteredRestrooms.map(item => {
-                const isSelected = selectedRestroom && selectedRestroom.id === item.id;
-                const st = STATUS_STYLES[item.status] || STATUS_STYLES.NORMAL;
-                const isOver = item.lastCleanedHours >= systemSettings.cleanWarnHours;
-
-                return (
-                  <div
-                    key={item.id}
-                    onClick={() => setSelectedRestroom(item)}
-                    style={{
-                      ...styles.restroomCard,
-                      border: isSelected ? '1px solid #0f172a' : '1px solid #e2e8f0',
-                      boxShadow: isSelected ? '0 0 0 1px #0f172a' : 'none'
-                    }}
-                  >
-                    <div style={styles.cardHeader}>
-                      <div>
-                        <div style={styles.cardTitle}>{item.name}</div>
-                        <div style={styles.cardSub}>{item.floor} &middot; {item.gender === '공용' ? '공용' : `${item.gender}성용`}</div>
-                      </div>
-                      <span style={{
-                        ...styles.statusPill,
-                        backgroundColor: st.bg,
-                        color: st.text,
-                        border: `1px solid ${st.border}`
-                      }}>
-                        <span style={{ ...styles.pillDot, backgroundColor: st.dot }} />
-                        {st.label}
-                      </span>
-                    </div>
-
-                    <div style={styles.metricsBox}>
-                      <div style={styles.metricRow}>
-                        <span style={styles.metricName}>실내 온도</span>
-                        <span style={styles.metricVal}>
-                          {formatReading(item.temp)}
-                          <span style={styles.unitText}>℃</span>
-                        </span>
-                      </div>
-                      <div style={styles.metricRow}>
-                        <span style={styles.metricName}>실내 습도</span>
-                        <span style={styles.metricVal}>
-                          {formatReading(item.humidity)}
-                          <span style={styles.unitText}>%</span>
-                        </span>
-                      </div>
-                      <div style={styles.metricRow}>
-                        <span style={styles.metricName}>MQ-135 ADC</span>
-                        <span style={{
-                          ...styles.metricVal,
-                          color: item.gas >= thresholds.gasWarn ? '#dc2626' : '#0f172a'
-                        }}>
-                          {formatReading(item.gas)}
-                          <span style={styles.unitText}>({getGasLabel(item.gas)})</span>
-                        </span>
-                      </div>
-                    </div>
-
-                    <div style={styles.cardFooter}>
-                      <span style={{ fontSize: '11px', color: isOver ? '#b91c1c' : '#64748b', fontWeight: isOver ? '600' : '400', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        청소 경과: {isOver ? (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                            <IconAlertCircle size={11} /> {item.lastCleanedHours}시간 경과
-                          </span>
-                        ) : (
-                          item.lastCleanedHours == null ? '청소 기록 없음' : `${item.lastCleanedHours}시간 전`
-                        )} ({item.cleanWorker})
-                      </span>
-                      <div style={{ display: 'flex', gap: '6px' }}>
-                        {isOver && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenDispatchModal(item.id);
-                            }}
-                            style={{
-                              ...styles.quickCleanBtn,
-                              backgroundColor: '#fef2f2',
-                              color: '#dc2626',
-                              borderColor: '#fecaca',
-                              fontWeight: '600'
-                            }}
-                            title="담당 미화 인원 지정 출동 지시"
-                          >
-                            <IconMegaphone size={11} style={{ marginRight: '3px' }} /> 출동 지시
-                          </button>
-                        )}
-                        <button
-                          onClick={(e) => openQuickCleaningModal(item, e)}
-                          style={styles.quickCleanBtn}
-                        >
-                          청소 등록
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* 시계열 차트 */}
-            {selectedRestroom && (
-              <div style={styles.chartPanel}>
-                <div style={styles.chartHeader}>
-                  <div>
-                    <h3 style={styles.chartTitle}>
-                      <IconTrend /> {selectedRestroom.name} 실시간 환경 모니터링 추이
-                    </h3>
-                    <span style={styles.chartSub}>
-                      MySQL 실측 이력 {historyPoints.length}개 &middot; 상태: {STATUS_STYLES[selectedRestroom.status].label}
-                    </span>
-                  </div>
-                  <div style={styles.rangeTabs}>
-                    {['1h', '6h', '24h', '7d'].map(range => (
-                      <button
-                        key={range}
-                        onClick={() => setChartRange(range)}
-                        style={{ ...styles.rangeBtn, ...(chartRange === range ? styles.rangeBtnActive : {}) }}
-                      >
-                        {range === '1h' ? '1시간' : range === '6h' ? '6시간' : range === '24h' ? '24시간' : '7일'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div style={{ height: '220px', width: '100%' }}>
-                  <Line data={generateChartData()} options={chartOptions} />
-                </div>
-              </div>
-            )}
+            {renderRestroomGrid(filteredRestrooms, adminFooter)}
           </div>
-
-          {/* 우측 패널 */}
           <aside style={styles.rightCol}>
-            <div style={styles.panelCard}>
-              <div style={styles.panelHeader}>
-                <h3 style={styles.panelTitle}>최근 현장 알림</h3>
-                <button onClick={() => setActiveTab('alerts')} style={styles.panelLink}>더보기 &rarr;</button>
-              </div>
-              <div style={styles.alertList}>
-                {accessibleAlerts.length === 0 ? (
-                  <div style={{ padding: '24px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '12px' }}>
-                    담당 구역의 알림 내역이 없습니다.
-                  </div>
-                ) : (
-                  accessibleAlerts.slice(0, 6).map(alert => {
-                    const st = STATUS_STYLES[alert.level] || STATUS_STYLES.NORMAL;
-                    return (
-                      <div key={alert.id} style={styles.alertItem}>
-                        <div style={styles.alertTop}>
-                          <span style={styles.alertTime}>{alert.time}</span>
-                          <span style={styles.alertRestroom}>{alert.restroom}</span>
-                          <span style={{ ...styles.statusPillSmall, backgroundColor: st.bg, color: st.text, border: `1px solid ${st.border}` }}>
-                            {alert.metric}
-                          </span>
-                        </div>
-                        <div style={styles.alertBottom}>
-                          <span style={styles.alertMemo}>{alert.memo}</span>
-                          {!alert.isChecked ? (
-                            <button onClick={(e) => handleCheckAlert(alert.id, e)} style={styles.checkBtn}>확인</button>
-                          ) : (
-                            <span style={styles.checkedText}>완료</span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            <div style={{ ...styles.panelCard, marginTop: '16px' }}>
-              <div style={styles.panelHeader}>
-                <h3 style={styles.panelTitle}>청소원별 최근 작업</h3>
-                <button onClick={() => setActiveTab('cleaning')} style={styles.panelLink}>전체 &rarr;</button>
-              </div>
-              <div style={styles.cleaningList}>
-                {accessibleRestrooms.map(r => {
-                  const isOver = r.lastCleanedHours >= systemSettings.cleanWarnHours;
-                  return (
-                    <div key={r.id} style={styles.cleaningRow}>
-                      <div>
-                        <span style={styles.cleaningName}>{r.name}</span>
-                        <span style={{ fontSize: '11px', color: '#94a3b8', marginLeft: '6px' }}>({r.cleanWorker})</span>
-                      </div>
-                      <span style={{ fontSize: '12px', fontWeight: '500', color: isOver ? '#991b1b' : '#64748b' }}>
-                        {isOver ? (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                            <IconAlertCircle size={12} /> {r.lastCleanedHours}h 지연
-                          </span>
-                        ) : (
-                          r.lastCleanedHours == null ? '기록 없음' : `${r.lastCleanedHours}h 전`
-                        )}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            {renderAlertPanel()}
+            {renderCleaningPanel()}
           </aside>
         </div>
+
+        {renderHistoryChart(`MySQL 실측 이력 ${historyPoints.length}개 · 최근 측정 ${selectedRestroom?.lastUpdated ?? '—'}`)}
       </div>
     );
   };
 
   // --- [최고 개발자 전용 대시보드 화면] ---
   const renderDeveloperDashboard = () => {
+    const developerFooter = (item) => (
+      <div style={styles.cardFooter}>
+        <span style={{ fontSize: '12px', color: '#475569', fontVariantNumeric: 'tabular-nums', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {item.lat == null || item.lng == null ? '설치 좌표 미등록' : `좌표 ${item.lat}, ${item.lng}`}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleToggleRestroomActive(item.id);
+          }}
+          style={{
+            ...styles.quickCleanBtn,
+            ...(item.isActive
+              ? { backgroundColor: '#f0fdf4', color: '#15803d', borderColor: '#bbf7d0' }
+              : { backgroundColor: '#fef2f2', color: '#b91c1c', borderColor: '#fecaca' })
+          }}
+        >
+          {item.isActive ? '센서 ON' : '센서 OFF'}
+        </button>
+      </div>
+    );
+
     return (
       <div style={{ marginTop: '16px' }}>
-        {/* 개발자 시스템 제어 툴바 */}
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '12px 18px',
-          backgroundColor: '#ffffff',
-          borderRadius: '8px',
-          border: '1px solid #e2e8f0',
-          marginBottom: '16px',
-          boxShadow: '0 1px 2px rgba(0,0,0,0.02)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '13px', fontWeight: '700', color: '#4f46e5', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <IconRoleDeveloper size={15} color="#4f46e5" /> IoT 시스템 엔지니어링 제어반
-            </span>
-            <span style={{ fontSize: '11px', color: '#64748b', backgroundColor: '#eef2ff', padding: '2px 8px', borderRadius: '4px' }}>
-              최고 관리자 전용
-            </span>
-          </div>
-
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              onClick={() => setIsAddRestroomModalOpen(true)}
-              style={{
-                padding: '6px 12px',
-                borderRadius: '6px',
-                border: 'none',
-                backgroundColor: '#4f46e5',
-                color: '#ffffff',
-                fontSize: '12px',
-                fontWeight: '600',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <IconPlus /> 신규 화장실/센서 노드 등록
+        {renderToolbar(
+          <>
+            <IconRoleDeveloper size={15} color="#4f46e5" /> IoT 시스템 엔지니어링 제어
+            <span style={{ ...styles.statusPillSmall, backgroundColor: '#eef2ff', color: '#4338ca', border: '1px solid #c7d2fe' }}>최고 관리자 전용</span>
+          </>,
+          <>
+            <button onClick={() => setIsAddRestroomModalOpen(true)} style={{ ...styles.primaryBtn, backgroundColor: '#4f46e5' }}>
+              <IconPlus /> 신규 노드 등록
             </button>
-
-            <button
-              onClick={handlePingAllSensors}
-              style={styles.secondaryBtn}
-            >
-              <IconRefresh size={13} /> 전체 센서 핑(Ping) 테스트
+            <button onClick={handlePingAllSensors} style={styles.secondaryBtn}>
+              <IconRefresh size={13} /> 연결 확인
             </button>
-
             <button
               onClick={() => {
                 navigator.clipboard?.writeText(systemSettings.deviceKey);
@@ -1701,259 +1496,76 @@ export default function AdminPage() {
               }}
               style={styles.secondaryBtn}
             >
-              <IconKey size={13} /> 시연용 장치 키 복사
+              <IconKey size={13} /> 장치 키 복사
             </button>
-
             <button
               onClick={() => {
                 setActiveTab('settings');
                 setSettingsSubTab('system');
               }}
-              style={{
-                ...styles.secondaryBtn,
-                backgroundColor: '#f8fafc'
-              }}
+              style={{ ...styles.secondaryBtn, backgroundColor: '#f1f5f9' }}
             >
-              <IconSliders size={13} /> 시스템 파라미터 제어
+              <IconSliders size={13} /> 시스템 설정
             </button>
-          </div>
-        </div>
+          </>
+        )}
 
-        {/* 개발자 엔지니어링 메트릭 5종 */}
         <div style={styles.summaryGrid}>
-          <div style={styles.summaryCard}>
-            <span style={styles.summaryLabel}>전체 등록 노드</span>
-            <div style={{ ...styles.summaryValue, color: '#4f46e5' }}>{restrooms.length}개소</div>
-          </div>
-          <div style={styles.summaryCard}>
-            <span style={styles.summaryLabel}>정상 통신 노드</span>
-            <div style={{ ...styles.summaryValue, color: '#16a34a' }}>{restrooms.length - offlineCount}개</div>
-          </div>
-          <div style={styles.summaryCard}>
-            <span style={styles.summaryLabel}>통신 두절 (OFFLINE)</span>
-            <div style={{ ...styles.summaryValue, color: offlineCount > 0 ? '#dc2626' : '#64748b' }}>
-              {offlineCount}개
-            </div>
-          </div>
-          <div style={styles.summaryCard}>
-            <span style={styles.summaryLabel}>센서 폴링 주기</span>
-            <div style={styles.summaryValue}>30s</div>
-          </div>
-          <div style={styles.summaryCard}>
-            <span style={styles.summaryLabel}>네트워크 지연 미측정</span>
-            <div style={{ ...styles.summaryValue, color: '#059669' }}>—</div>
-          </div>
+          {renderSummaryCard({ label: '전체 등록 노드', value: totalCount, filter: 'ALL' })}
+          {renderSummaryCard({ label: '정상 수신', value: normalCount, filter: 'RECEIVING' })}
+          {renderSummaryCard({ label: '주의/위험', value: warnCount + dangerCount, color: warnCount + dangerCount > 0 ? '#dc2626' : '#0f172a', filter: 'ALERTING' })}
+          {renderSummaryCard({ label: '통신 두절', value: offlineCount, color: offlineCount > 0 ? '#dc2626' : '#0f172a', filter: 'OFFLINE' })}
+          {renderSummaryCard({ label: '미확인 알림', value: uncheckedAlerts, color: uncheckedAlerts > 0 ? '#d97706' : '#0f172a', onClick: () => setActiveTab('alerts') })}
         </div>
 
-        {/* 필터 및 컨트롤 바 */}
-        <div style={styles.filterBar}>
-          <div style={styles.filterGroup}>
-            <span style={styles.filterLabel}>층별</span>
-            <select value={filterFloor} onChange={e => setFilterFloor(e.target.value)} style={styles.select}>
-              <option value="ALL">전체 구역</option>
-              {[...new Set(accessibleRestrooms.map(r => r.floor))].map(floor => <option key={floor} value={floor}>{floor}</option>)}
-            </select>
-            <span style={{ ...styles.filterLabel, marginLeft: '16px' }}>하드웨어 상태</span>
-            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={styles.select}>
-              <option value="ALL">전체 상태</option>
-              <option value="RECEIVING">수신 중</option>
-              <option value="NORMAL">정상</option>
-              <option value="WARN">주의</option>
-              <option value="DANGER">위험</option>
-              <option value="OFFLINE">오프라인</option>
-            </select>
-          </div>
-          <div style={styles.filterGroup}>
-            <span style={styles.filterLabel}>정렬</span>
-            <select value={sortOrder} onChange={e => setSortOrder(e.target.value)} style={styles.select}>
-              <option value="DANGER_FIRST">단절/에러 우선</option>
-              <option value="FLOOR_ASC">층수 오름차순</option>
-              <option value="NAME_ASC">기기 이름순</option>
-            </select>
-          </div>
-        </div>
+        {renderFilterBar()}
 
-        {/* 중앙 2열: IoT 노드 그리드 + 3축 정밀 차트 / 우측 패킷 로그 */}
+        {/* 중앙 2열: IoT 노드 그리드 / 우측 패킷 로그 */}
         <div style={styles.dashboardBody}>
           <div style={styles.leftCol}>
-            <div style={styles.restroomGrid}>
-              {filteredRestrooms.map(item => {
-                const isSelected = selectedRestroom && selectedRestroom.id === item.id;
-                const isOffline = item.status === 'OFFLINE' || !item.isActive;
-                const st = STATUS_STYLES[item.status] || STATUS_STYLES.NORMAL;
-
-                return (
-                  <div
-                    key={item.id}
-                    onClick={() => setSelectedRestroom(item)}
-                    style={{
-                      ...styles.restroomCard,
-                      border: isSelected ? '2px solid #4f46e5' : '1px solid #e2e8f0',
-                      opacity: isOffline ? 0.75 : 1
-                    }}
-                  >
-                    <div style={styles.cardHeader}>
-                      <div>
-                        <div style={{ ...styles.cardTitle, color: '#0f172a' }}>{item.name}</div>
-                        <div style={{
-                          display: 'inline-block',
-                          fontSize: '11px',
-                          fontWeight: '600',
-                          color: '#4338ca',
-                          backgroundColor: '#eef2ff',
-                          padding: '1px 6px',
-                          borderRadius: '4px',
-                          marginTop: '3px'
-                        }}>
-                          {item.deviceId}
-                        </div>
-                      </div>
-                      <span style={{ ...styles.statusPill, backgroundColor: st.bg, color: st.text, border: `1px solid ${st.border}` }}>
-                        <span style={{ ...styles.pillDot, backgroundColor: st.dot }} />
-                        {st.label}
-                      </span>
-                    </div>
-
-                    <div style={styles.metricsBox}>
-                      <div style={styles.metricRow}>
-                        <span style={styles.metricName}>DHT11 온도</span>
-                        <span style={styles.metricVal}>
-                          {formatReading(item.temp)}
-                          <span style={styles.unitText}>℃</span>
-                        </span>
-                      </div>
-                      <div style={styles.metricRow}>
-                        <span style={styles.metricName}>DHT11 습도</span>
-                        <span style={styles.metricVal}>
-                          {formatReading(item.humidity)}
-                          <span style={styles.unitText}>%</span>
-                        </span>
-                      </div>
-                      <div style={styles.metricRow}>
-                        <span style={styles.metricName}>MQ-135 RAW</span>
-                        <span style={{
-                          ...styles.metricVal,
-                          color: item.gas >= thresholds.gasWarn ? '#dc2626' : '#0f172a'
-                        }}>
-                          {formatReading(item.gas)}
-                          <span style={styles.unitText}>ADC</span>
-                        </span>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', paddingTop: '8px', borderTop: '1px solid #f1f5f9' }}>
-                      <span style={{ fontSize: '11px', color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
-                        위치: {item.lat == null || item.lng == null ? '설치 좌표 미등록' : `${item.lat}, ${item.lng}`}
-                      </span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleToggleRestroomActive(item.id);
-                        }}
-                        style={{
-                          padding: '3px 8px',
-                          borderRadius: '4px',
-                          border: item.isActive ? '1px solid #bbf7d0' : '1px solid #fecaca',
-                          backgroundColor: item.isActive ? '#f0fdf4' : '#fee2e2',
-                          color: item.isActive ? '#15803d' : '#b91c1c',
-                          fontSize: '11px',
-                          fontWeight: '700',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        {item.isActive ? '센서 ON' : '센서 OFF'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* 정밀 3축 시계열 차트 */}
-            {selectedRestroom && (
-              <div style={styles.chartPanel}>
-                <div style={styles.chartHeader}>
-                  <div>
-                    <h3 style={styles.chartTitle}>
-                      <IconTrend /> [{selectedRestroom.deviceId}] 3축 정밀 센서 시계열
-                    </h3>
-                    <span style={styles.chartSub}>
-                      시설: {selectedRestroom.name} &middot; 노드 상태: {selectedRestroom.isActive ? '수신 중' : '비활성'}
-                    </span>
-                  </div>
-                  <div style={styles.rangeTabs}>
-                    {['1h', '6h', '24h', '7d'].map(range => (
-                      <button
-                        key={range}
-                        onClick={() => setChartRange(range)}
-                        style={{ ...styles.rangeBtn, ...(chartRange === range ? styles.rangeBtnActive : {}) }}
-                      >
-                        {range === '1h' ? '1시간' : range === '6h' ? '6시간' : range === '24h' ? '24시간' : '7일'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div style={{ height: '220px', width: '100%' }}>
-                  <Line data={generateChartData()} options={chartOptions} />
-                </div>
-              </div>
-            )}
+            {renderRestroomGrid(filteredRestrooms, developerFooter, { sub: item => `장치 ${item.deviceId}` })}
           </div>
 
-          {/* 우측 패널: 센서 패킷 로그 스트림 */}
           <aside style={styles.rightCol}>
             <div style={styles.panelCard}>
               <div style={styles.panelHeader}>
-                <h3 style={styles.panelTitle}>센서 패킷 스트림 로그</h3>
-                <span style={{ fontSize: '10px', color: '#16a34a', fontWeight: '600' }}>{packetLogs.length ? '● 조회한 실측 패킷' : '패킷 조회 대기'}</span>
+                <h3 style={styles.panelTitle}>센서 패킷 로그</h3>
+                <span style={{ fontSize: '12px', fontWeight: '600', color: packetLogs.length ? '#16a34a' : '#64748b', whiteSpace: 'nowrap' }}>
+                  {packetLogs.length ? '● 실측 수신' : '조회 대기'}
+                </span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {packetLogs.map(log => (
-                  <div key={log.id} style={{ padding: '8px 10px', backgroundColor: '#0f172a', borderRadius: '6px', fontFamily: '"SF Mono", "Fira Code", Menlo, monospace', fontSize: '11px', letterSpacing: '0.2px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', marginBottom: '2px' }}>
-                      <span>[{log.deviceId}]</span>
-                      <span>{log.time}</span>
-                    </div>
-                    <div style={{ color: log.status === 'OK' ? '#4ade80' : '#f87171' }}>
-                      {log.payload}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ ...styles.panelCard, marginTop: '16px' }}>
-              <div style={styles.panelHeader}>
-                <h3 style={styles.panelTitle}>시스템 장애 및 이상 로그</h3>
-                <button onClick={() => setActiveTab('alerts')} style={styles.panelLink}>전체 &rarr;</button>
-              </div>
-              <div style={styles.alertList}>
-                {alerts.slice(0, 5).map(alert => {
-                  const st = STATUS_STYLES[alert.level] || STATUS_STYLES.NORMAL;
-                  return (
-                    <div key={alert.id} style={styles.alertItem}>
+              {packetLogs.length === 0 ? (
+                <div style={styles.panelEmpty}>조회한 패킷이 없습니다.</div>
+              ) : (
+                <div style={styles.alertList}>
+                  {packetLogs.map(log => (
+                    <div key={log.id} style={styles.alertItem}>
                       <div style={styles.alertTop}>
-                        <span style={styles.alertTime}>{alert.time}</span>
-                        <span style={styles.alertRestroom}>{alert.restroom}</span>
-                        <span style={{ ...styles.statusPillSmall, backgroundColor: st.bg, color: st.text, border: `1px solid ${st.border}` }}>
-                          {alert.metric}
+                        <span style={styles.alertTime}>{log.time}</span>
+                        <span style={{ ...styles.alertRestroom, fontFamily: MONO_FONT }}>{log.deviceId}</span>
+                        <span style={{
+                          ...styles.statusPillSmall,
+                          ...(log.status === 'OK'
+                            ? { backgroundColor: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' }
+                            : { backgroundColor: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca' })
+                        }}>
+                          {log.status}
                         </span>
                       </div>
-                      <div style={styles.alertBottom}>
-                        <span style={styles.alertMemo}>{alert.memo}</span>
-                        {!alert.isChecked ? (
-                          <button onClick={(e) => handleCheckAlert(alert.id, e)} style={styles.checkBtn}>확인</button>
-                        ) : (
-                          <span style={styles.checkedText}>완료</span>
-                        )}
+                      <div title={log.payload} style={{ fontFamily: MONO_FONT, fontSize: '11px', color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {log.payload}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
+
+            {renderAlertPanel()}
           </aside>
         </div>
+
+        {renderHistoryChart(`장치 ${selectedRestroom?.deviceId ?? '—'} · MySQL 실측 이력 ${historyPoints.length}개 · 최근 측정 ${selectedRestroom?.lastUpdated ?? '—'}`)}
       </div>
     );
   };
@@ -1965,7 +1577,7 @@ export default function AdminPage() {
         <div style={styles.headerLeft}>
           <div style={styles.brandTitleGroup}>
             <span style={styles.brandBadge}>TCP CLEAN</span>
-            <h1 style={styles.headerTitle}>화장실 환경 관제 시스템</h1>
+            <h1 className="admin-header-optional" style={styles.headerTitle}>화장실 환경 관제 시스템</h1>
           </div>
 
           <nav style={styles.navMenu}>
@@ -2008,17 +1620,17 @@ export default function AdminPage() {
         </div>
 
         <div style={styles.headerRight}>
-          <span style={styles.lastUpdateText}>갱신 {lastUpdatedTime}</span>
+          <span className="admin-header-optional" style={styles.lastUpdateText}>갱신 {lastUpdatedTime}</span>
           <span style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: '6px',
             padding: '3px 8px',
-            borderRadius: '12px',
+            borderRadius: '999px',
             fontSize: '11px',
             fontWeight: '600',
             color: roleInfo.color,
-            backgroundColor: roleInfo.bg,
+            backgroundColor: roleInfo.bgColor,
             border: `1px solid ${roleInfo.color}30`
           }}>
             {user?.role === 'DEVELOPER' && <IconRoleDeveloper size={12} color={roleInfo.color} />}
@@ -2034,9 +1646,9 @@ export default function AdminPage() {
       {/* 토스트 알림 */}
       <section className="sensor-data-toolbar">
         <SensorDataStatus loading={dataLoading} />
-        <p>{selectedRestroom?.ingestSource === 'direct_api' ? 'ESP32 Wi-Fi → 백엔드 → MySQL' : 'MySQL에 보관한 ESP32 실측값'} · MQ-135는 보정 전 ADC 값 · 마지막 측정 {selectedRestroom?.lastUpdated || '확인 중'}</p>
-        {user?.isDemo && <p>체험용 역할 로그인 · 청소·출동·시설 설정은 화면 시연 기능입니다.</p>}
-        {dataError && <p role="alert" className="sensor-data-error">{dataError}</p>}
+        <p title={`${selectedRestroom?.ingestSource === 'direct_api' ? 'ESP32 Wi-Fi → 백엔드 → MySQL' : 'MySQL에 보관한 ESP32 실측값'} · MQ-135는 보정 전 ADC 값 · 마지막 측정 ${selectedRestroom?.lastUpdated || '확인 중'}`}>{selectedRestroom?.ingestSource === 'direct_api' ? 'ESP32 Wi-Fi → 백엔드 → MySQL' : 'MySQL에 보관한 ESP32 실측값'} · MQ-135는 보정 전 ADC 값 · 마지막 측정 {selectedRestroom?.lastUpdated || '확인 중'}</p>
+        {user?.isDemo && <p title="체험용 역할 로그인 · 청소·출동·시설 설정은 화면 시연 기능입니다.">체험용 역할 로그인 · 청소·출동·시설 설정은 화면 시연 기능입니다.</p>}
+        {dataError && <p role="alert" className="sensor-data-error" title={dataError}>{dataError}</p>}
         {!dataLoading && restrooms.length === 0 && <p>등록된 센서 데이터가 없습니다.</p>}
       </section>
       {toastMsg && (
@@ -2053,11 +1665,11 @@ export default function AdminPage() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '12px 18px',
+            padding: '12px 16px',
             backgroundColor: '#ffffff',
             borderRadius: '8px',
             border: '1px solid #e2e8f0',
-            boxShadow: '0 1px 2px rgba(0,0,0,0.02)'
+            boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <span style={{
@@ -2069,7 +1681,7 @@ export default function AdminPage() {
                 fontSize: '12px',
                 fontWeight: '700',
                 color: roleInfo.color,
-                backgroundColor: roleInfo.bg,
+                backgroundColor: roleInfo.bgColor,
                 border: `1px solid ${roleInfo.color}40`
               }}>
                 {user?.role === 'DEVELOPER' && <IconRoleDeveloper size={14} color={roleInfo.color} />}
@@ -2131,7 +1743,7 @@ export default function AdminPage() {
                     }}
                   >
                     <div style={{ fontSize: '11px', fontWeight: '600', color: '#0f172a' }}>{item.name}</div>
-                    <div style={{ fontSize: '10px', marginTop: '2px', color: '#64748b' }}>
+                    <div style={{ fontSize: '11px', marginTop: '2px', color: '#64748b' }}>
                       {st.label} &middot; {formatReading(item.temp)}℃ / {formatReading(item.humidity)}%
                     </div>
                   </div>
@@ -2177,7 +1789,7 @@ export default function AdminPage() {
             <tbody>
               {accessibleAlerts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '36px', color: '#94a3b8', fontSize: '13px' }}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: '36px', color: '#64748b', fontSize: '13px' }}>
                     담당 구역의 알림 내역이 없습니다.
                   </td>
                 </tr>
@@ -2245,9 +1857,9 @@ export default function AdminPage() {
                       backgroundColor: isOver ? '#fff5f5' : '#ffffff'
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '12px', fontWeight: '600', color: '#0f172a' }}>{r.name}</span>
-                      <span style={{ fontSize: '10px', color: '#94a3b8' }}>{r.floor}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                      <span title={r.name} style={{ fontSize: '12px', fontWeight: '600', color: '#0f172a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                      <span style={{ fontSize: '11px', color: '#64748b', flexShrink: 0, whiteSpace: 'nowrap' }}>{r.floor}</span>
                     </div>
                     <div style={{ marginTop: '4px', fontSize: '11px', color: isOver ? '#991b1b' : '#334155' }}>
                       {isOver ? (
@@ -2348,7 +1960,7 @@ export default function AdminPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>청소 이력 로그</h3>
-                  <span style={{ fontSize: '11px', color: '#64748b' }}>최근 등록된 순으로 정렬됩니다. (담당 구역 총 {accessibleCleaningLogs.length}건)</span>
+                  <span style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap' }}>최신순 &middot; 담당 구역 총 {accessibleCleaningLogs.length}건</span>
                 </div>
 
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -2396,7 +2008,7 @@ export default function AdminPage() {
                       ))}
                     {accessibleCleaningLogs.filter(log => cleanFilterRestroom === 'ALL' || log.restroomName === cleanFilterRestroom).length === 0 && (
                       <tr>
-                        <td colSpan={6} style={{ textAlign: 'center', padding: '36px', color: '#94a3b8', fontSize: '13px' }}>
+                        <td colSpan={6} style={{ textAlign: 'center', padding: '36px', color: '#64748b', fontSize: '13px' }}>
                           담당 구역의 청소 이력이 없습니다.
                         </td>
                       </tr>
@@ -2461,12 +2073,12 @@ export default function AdminPage() {
                 <div>
                   <h3 style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#0f172a' }}>환경 임계값 기준 설정</h3>
                   <span style={{ fontSize: '11px', color: '#64748b' }}>
-                    실시간 센서값이 설정된 주의/위험 범위를 초과하면 알림이 생성되고 대시보드 상태가 변경됩니다.
+                    센서값이 기준 이상이면 대시보드 상태가 주의·위험으로 바뀝니다.
                   </span>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '11px', color: '#64748b' }}>적용 대상:</span>
+                  <span style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap' }}>적용 대상:</span>
                   <select
                     value={thresholdScope}
                     onChange={e => setThresholdScope(e.target.value)}
@@ -2576,7 +2188,7 @@ export default function AdminPage() {
                 >
                   기본값 복원
                 </button>
-                <button onClick={() => showToast('변경된 임계값이 저장되었습니다.')} style={styles.primaryBtn}>
+                <button onClick={() => showToast('임계값을 적용했습니다. 서버에는 저장되지 않고 이 화면 세션에만 반영됩니다.')} style={styles.primaryBtn}>
                   임계값 저장
                 </button>
               </div>
@@ -2614,7 +2226,7 @@ export default function AdminPage() {
                       <tr key={r.id} style={styles.tr}>
                         <td style={{ ...styles.td, fontWeight: '600' }}>{r.name}</td>
                         <td style={styles.td}>{r.floor}</td>
-                        <td style={styles.td}>{r.gender}성용</td>
+                        <td style={styles.td}>{genderLabel(r.gender)}</td>
                         <td style={{ ...styles.td, fontFamily: 'monospace' }}>{r.deviceId}</td>
                         <td style={styles.td}>
                           <span style={{
@@ -2643,7 +2255,7 @@ export default function AdminPage() {
               </div>
             ) : (
               <div style={{ ...styles.panelCard, textAlign: 'center', padding: '60px 24px' }}>
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px', color: '#94a3b8' }}>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px', color: '#64748b' }}>
                   <IconLock size={36} />
                 </div>
                 <h3 style={{ fontSize: '15px', fontWeight: '700', color: '#0f172a', margin: '0 0 8px 0' }}>
@@ -2763,7 +2375,7 @@ export default function AdminPage() {
               </div>
             ) : (
               <div style={{ ...styles.panelCard, textAlign: 'center', padding: '60px 24px' }}>
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px', color: '#94a3b8' }}>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px', color: '#64748b' }}>
                   <IconLock size={36} />
                 </div>
                 <h3 style={{ fontSize: '15px', fontWeight: '700', color: '#0f172a', margin: '0 0 8px 0' }}>
@@ -2945,7 +2557,11 @@ export default function AdminPage() {
                 </label>
                 <select
                   value={dispatchTargetId}
-                  onChange={e => setDispatchTargetId(e.target.value)}
+                  onChange={e => {
+                    const value = e.target.value;
+                    // 개별 구역은 숫자 ID로 보관해야 목록의 구역과 일치합니다.
+                    setDispatchTargetId(value.startsWith('ALL_') ? value : Number(value));
+                  }}
                   style={styles.formSelect}
                 >
                   <option value="ALL_DELAYED">
@@ -2971,7 +2587,7 @@ export default function AdminPage() {
                         지연 대상: <strong>{accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours).map(r => `${r.name}(${r.lastCleanedHours}시간 경과)`).join(', ')}</strong>
                       </span>
                     ) : (
-                      <span>현재 8시간 이상 지연된 구역이 없습니다. (전체 담당 구역으로 일괄 발령 가능)</span>
+                      <span>현재 {systemSettings.cleanWarnHours}시간 이상 지연된 구역이 없습니다. (전체 담당 구역으로 일괄 발령 가능)</span>
                     )}
                   </div>
                 ) : (
@@ -3028,8 +2644,8 @@ export default function AdminPage() {
                           boxShadow: isSelected ? '0 0 0 1px #2563eb' : 'none'
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
                             <div style={{
                               width: '30px',
                               height: '30px',
@@ -3044,28 +2660,29 @@ export default function AdminPage() {
                             }}>
                               {cleaner.name.slice(0, 1)}
                             </div>
-                            <div>
-                              <div style={{ fontSize: '13px', fontWeight: '700', color: '#0f172a' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: '13px', fontWeight: '700', color: '#0f172a', whiteSpace: 'nowrap' }}>
                                 {cleaner.name}
-                                <span style={{ marginLeft: '5px', fontSize: '10px', color: '#64748b', fontWeight: '500' }}>
+                                <span style={{ marginLeft: '5px', fontSize: '11px', color: '#64748b', fontWeight: '500' }}>
                                   {cleaner.team}
                                 </span>
                               </div>
-                              <div style={{ fontSize: '11px', color: '#475569', marginTop: '1px' }}>
+                              <div title={cleaner.roleDesc} style={{ fontSize: '11px', color: '#475569', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                 {cleaner.roleDesc}
                               </div>
                             </div>
                           </div>
 
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
                             <span style={{
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '4px',
-                              padding: '2px 6px',
-                              borderRadius: '4px',
-                              fontSize: '10px',
+                              padding: '2px 8px',
+                              borderRadius: '999px',
+                              fontSize: '11px',
                               fontWeight: '600',
+                              whiteSpace: 'nowrap',
                               backgroundColor: cleaner.isAvailable ? '#f0fdf4' : '#fffbeb',
                               color: cleaner.isAvailable ? '#166534' : '#b45309',
                               border: cleaner.isAvailable ? '1px solid #bbf7d0' : '1px solid #fde68a'
@@ -3078,7 +2695,7 @@ export default function AdminPage() {
                               }} />
                               {cleaner.status}
                             </span>
-                            <span style={{ fontSize: '10px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                            <span style={{ fontSize: '11px', color: '#64748b', display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap' }}>
                               <IconPhone size={10} /> {cleaner.phone}
                             </span>
                           </div>
@@ -3087,7 +2704,7 @@ export default function AdminPage() {
                         {/* 하단 체크 상태 표시 */}
                         <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px dashed #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px' }}>
                           <span style={{ color: isSelected ? '#2563eb' : '#94a3b8', fontWeight: isSelected ? '600' : '400', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            {isSelected ? <IconCheckCircle size={12} color="#2563eb" /> : <span style={{ width: '12px', height: '12px', border: '1px solid #cbd5e1', borderRadius: '3px', display: 'inline-block' }} />}
+                            {isSelected ? <IconCheckCircle size={12} color="#2563eb" /> : <span style={{ width: '12px', height: '12px', border: '1px solid #cbd5e1', borderRadius: '4px', display: 'inline-block' }} />}
                             {isSelected ? '출동 배정 인원' : '클릭하여 선택'}
                           </span>
                         </div>
@@ -3158,7 +2775,7 @@ export default function AdminPage() {
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <button
                       type="button"
-                      onClick={() => setDispatchMemo('청소 기준 시간(8시간) 초과 구역 현장 점검 및 즉시 바닥 소독 요망')}
+                      onClick={() => setDispatchMemo(`청소 기준 시간(${systemSettings.cleanWarnHours}시간) 초과 구역 현장 점검 및 즉시 바닥 소독 요망`)}
                       style={styles.memoQuickBtn}
                     >
                       #시간초과
@@ -3212,7 +2829,7 @@ export default function AdminPage() {
                   onClick={handleConfirmDispatch}
                   style={{
                     padding: '8px 16px',
-                    borderRadius: '5px',
+                    borderRadius: '6px',
                     border: 'none',
                     backgroundColor: dispatchUrgency === 'EMERGENCY' ? '#dc2626' : '#2563eb',
                     color: '#ffffff',
@@ -3255,17 +2872,21 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '0 20px',
-    borderBottom: '1px solid #e2e8f0'
+    borderBottom: '1px solid #e2e8f0',
+    gap: '16px',
+    overflowX: 'auto'
   },
   headerLeft: {
     display: 'flex',
     alignItems: 'center',
-    gap: '20px'
+    gap: '20px',
+    flexShrink: 0
   },
   brandTitleGroup: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px'
+    gap: '8px',
+    whiteSpace: 'nowrap'
   },
   brandBadge: {
     padding: '2px 6px',
@@ -3275,14 +2896,16 @@ const styles = {
     borderRadius: '4px',
     fontSize: '11px',
     fontWeight: '700',
-    letterSpacing: '0.3px'
+    letterSpacing: '0.3px',
+    whiteSpace: 'nowrap'
   },
   headerTitle: {
     margin: 0,
     fontSize: '14px',
     fontWeight: '600',
     letterSpacing: '-0.3px',
-    color: '#0f172a'
+    color: '#0f172a',
+    whiteSpace: 'nowrap'
   },
   navMenu: {
     display: 'flex',
@@ -3295,11 +2918,12 @@ const styles = {
     fontSize: '13px',
     fontWeight: '500',
     padding: '6px 10px',
-    borderRadius: '5px',
+    borderRadius: '6px',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
-    transition: 'all 0.15s'
+    transition: 'all 0.15s',
+    whiteSpace: 'nowrap'
   },
   navItemActive: {
     color: '#0f172a',
@@ -3310,33 +2934,42 @@ const styles = {
     marginLeft: '5px',
     backgroundColor: '#0f172a',
     color: '#fff',
-    fontSize: '10px',
+    fontSize: '11px',
     padding: '1px 5px',
-    borderRadius: '8px',
+    borderRadius: '999px',
     fontWeight: '600'
   },
   headerRight: {
     display: 'flex',
     alignItems: 'center',
-    gap: '14px'
+    gap: '14px',
+    flexShrink: 0
   },
   lastUpdateText: {
     fontSize: '12px',
-    color: '#94a3b8'
+    color: '#64748b',
+    whiteSpace: 'nowrap'
   },
   userInfo: {
     fontSize: '12px',
     fontWeight: '500',
-    color: '#475569'
+    color: '#475569',
+    whiteSpace: 'nowrap'
   },
   logoutBtn: {
     backgroundColor: 'transparent',
     border: '1px solid #cbd5e1',
     color: '#64748b',
-    padding: '4px 8px',
-    borderRadius: '4px',
-    fontSize: '11px',
-    cursor: 'pointer'
+    padding: '5px 10px',
+    borderRadius: '6px',
+    fontSize: '12px',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    fontWeight: '600',
+    whiteSpace: 'nowrap'
   },
   toast: {
     position: 'fixed',
@@ -3345,7 +2978,7 @@ const styles = {
     backgroundColor: '#0f172a',
     color: '#fff',
     padding: '8px 14px',
-    borderRadius: '4px',
+    borderRadius: '8px',
     boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
     zIndex: 9999,
     fontSize: '12px',
@@ -3358,75 +2991,117 @@ const styles = {
     margin: '0 auto',
     padding: '16px 20px'
   },
+  toolbar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '12px',
+    padding: '12px 16px',
+    backgroundColor: '#ffffff',
+    borderRadius: '8px',
+    border: '1px solid #e2e8f0',
+    marginBottom: '16px',
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)'
+  },
+  toolbarTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '13px',
+    fontWeight: '600',
+    color: '#0f172a',
+    whiteSpace: 'nowrap'
+  },
+  toolbarActions: {
+    display: 'flex',
+    gap: '8px',
+    flexShrink: 0
+  },
+  panelEmpty: {
+    padding: '24px 12px',
+    textAlign: 'center',
+    color: '#64748b',
+    fontSize: '13px'
+  },
   summaryGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(6, 1fr)',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
     gap: '10px',
-    marginBottom: '14px'
+    marginBottom: '16px'
   },
   summaryCard: {
     backgroundColor: '#ffffff',
     padding: '12px 14px',
-    borderRadius: '6px',
+    borderRadius: '8px',
     border: '1px solid #e2e8f0',
     display: 'flex',
     flexDirection: 'column',
-    justifyContent: 'center'
+    justifyContent: 'center',
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+    transition: 'border-color 0.15s ease, box-shadow 0.15s ease'
+  },
+  summaryCardActive: {
+    borderColor: '#0f172a',
+    boxShadow: '0 0 0 1px #0f172a'
   },
   summaryLabel: {
-    fontSize: '11px',
-    color: '#64748b',
+    fontSize: '12px',
+    color: '#475569',
     fontWeight: '500',
-    marginBottom: '2px'
+    marginBottom: '2px',
+    whiteSpace: 'nowrap'
   },
   summaryValue: {
-    fontSize: '20px',
+    fontSize: '22px',
     fontWeight: '700',
     color: '#0f172a',
     letterSpacing: '-0.3px'
   },
   filterBar: {
     backgroundColor: '#ffffff',
-    padding: '8px 14px',
-    borderRadius: '6px',
+    padding: '8px 16px',
+    borderRadius: '8px',
     border: '1px solid #e2e8f0',
-    marginBottom: '14px',
+    marginBottom: '16px',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'space-between'
+    justifyContent: 'space-between',
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)'
   },
   filterGroup: {
     display: 'flex',
     alignItems: 'center'
   },
   filterLabel: {
-    fontSize: '12px',
-    color: '#64748b',
+    fontSize: '13px',
+    color: '#475569',
     fontWeight: '500',
-    marginRight: '6px'
+    marginRight: '6px',
+    whiteSpace: 'nowrap'
   },
   select: {
-    padding: '4px 8px',
-    borderRadius: '4px',
+    padding: '5px 8px',
+    borderRadius: '6px',
     border: '1px solid #cbd5e1',
-    fontSize: '12px',
+    fontSize: '13px',
     color: '#334155',
     backgroundColor: '#fff'
   },
   dashboardBody: {
     display: 'grid',
-    gridTemplateColumns: '1fr 300px',
+    gridTemplateColumns: 'minmax(0, 1fr) 300px',
     gap: '16px'
   },
   leftCol: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '16px'
+    gap: '16px',
+    minWidth: 0
   },
   restroomGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
-    gap: '10px'
+    gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
+    gap: '12px'
   },
   restroomCard: {
     backgroundColor: '#ffffff',
@@ -3438,7 +3113,7 @@ const styles = {
     justifyContent: 'space-between',
     minHeight: '164px',
     border: '1px solid #e2e8f0',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
     transition: 'all 0.15s ease'
   },
   cardHeader: {
@@ -3448,41 +3123,50 @@ const styles = {
     marginBottom: '6px'
   },
   cardTitle: {
-    fontSize: '14px',
+    fontSize: '15px',
     fontWeight: '700',
     color: '#0f172a',
     letterSpacing: '-0.3px',
-    lineHeight: '1.3'
+    lineHeight: '1.3',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis'
   },
   cardSub: {
-    fontSize: '11px',
+    fontSize: '12px',
     color: '#64748b',
     marginTop: '2px',
-    letterSpacing: '-0.2px'
+    letterSpacing: '-0.2px',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis'
   },
   statusPill: {
     padding: '3px 8px',
-    borderRadius: '12px',
-    fontSize: '11px',
+    borderRadius: '999px',
+    fontSize: '12px',
     fontWeight: '600',
     display: 'inline-flex',
     alignItems: 'center',
     gap: '4px',
-    letterSpacing: '-0.2px'
+    letterSpacing: '-0.2px',
+    whiteSpace: 'nowrap',
+    flexShrink: 0
   },
   statusPillSmall: {
-    padding: '2px 6px',
-    borderRadius: '4px',
-    fontSize: '10px',
+    padding: '2px 8px',
+    borderRadius: '999px',
+    fontSize: '11px',
     fontWeight: '600',
     display: 'inline-flex',
     alignItems: 'center',
     backgroundColor: '#f1f5f9',
-    color: '#475569'
+    color: '#475569',
+    whiteSpace: 'nowrap'
   },
   pillDot: {
-    width: '5px',
-    height: '5px',
+    width: '6px',
+    height: '6px',
     borderRadius: '50%'
   },
   offlineBox: {
@@ -3502,7 +3186,7 @@ const styles = {
     border: '1px solid #eef2f6',
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px',
+    gap: '8px',
     margin: '8px 0 10px 0'
   },
   metricRow: {
@@ -3511,13 +3195,13 @@ const styles = {
     alignItems: 'center'
   },
   metricName: {
-    fontSize: '11px',
+    fontSize: '12px',
     fontWeight: '500',
-    color: '#64748b',
+    color: '#475569',
     letterSpacing: '-0.2px'
   },
   metricVal: {
-    fontSize: '12px',
+    fontSize: '14px',
     fontWeight: '700',
     color: '#0f172a',
     display: 'inline-flex',
@@ -3526,9 +3210,9 @@ const styles = {
     fontVariantNumeric: 'tabular-nums'
   },
   unitText: {
-    fontSize: '10px',
+    fontSize: '11px',
     fontWeight: '500',
-    color: '#94a3b8',
+    color: '#64748b',
     marginLeft: '2px'
   },
   metricsRow: {
@@ -3583,27 +3267,32 @@ const styles = {
     cursor: 'pointer'
   },
   quickCleanBtn: {
-    padding: '4px 10px',
-    borderRadius: '5px',
+    padding: '5px 10px',
+    borderRadius: '6px',
     border: '1px solid #cbd5e1',
     backgroundColor: '#ffffff',
     color: '#334155',
-    fontSize: '11px',
+    fontSize: '12px',
     fontWeight: '600',
+    whiteSpace: 'nowrap',
     cursor: 'pointer',
-    transition: 'all 0.15s ease'
+    transition: 'all 0.15s ease',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '4px'
   },
   chartPanel: {
     backgroundColor: '#ffffff',
-    borderRadius: '10px',
-    padding: '16px 20px',
+    borderRadius: '8px',
+    padding: '16px',
     border: '1px solid #e2e8f0',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
-    marginTop: '16px'
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+    marginTop: '0'
   },
   chartSection: {
     backgroundColor: '#ffffff',
-    borderRadius: '10px',
+    borderRadius: '8px',
     padding: '16px 20px',
     border: '1px solid #e2e8f0',
     boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
@@ -3613,36 +3302,45 @@ const styles = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: '10px'
+    marginBottom: '10px',
+    gap: '12px'
   },
   chartTitle: {
     margin: '0 0 2px 0',
-    fontSize: '13px',
+    fontSize: '14px',
     fontWeight: '600',
     color: '#0f172a',
     display: 'flex',
-    alignItems: 'center'
+    alignItems: 'center',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden'
   },
   chartSub: {
-    fontSize: '11px',
-    color: '#94a3b8'
+    fontSize: '12px',
+    color: '#64748b',
+    display: 'block',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis'
   },
   rangeTabs: {
     display: 'flex',
     gap: '2px',
     backgroundColor: '#f1f5f9',
     padding: '2px',
-    borderRadius: '4px'
+    borderRadius: '6px',
+    flexShrink: 0
   },
   rangeBtn: {
     border: 'none',
     backgroundColor: 'transparent',
-    padding: '3px 8px',
-    borderRadius: '3px',
-    fontSize: '10px',
+    padding: '4px 10px',
+    borderRadius: '4px',
+    fontSize: '12px',
     fontWeight: '500',
     color: '#64748b',
-    cursor: 'pointer'
+    cursor: 'pointer',
+    whiteSpace: 'nowrap'
   },
   rangeBtnActive: {
     backgroundColor: '#ffffff',
@@ -3651,13 +3349,16 @@ const styles = {
   },
   rightCol: {
     display: 'flex',
-    flexDirection: 'column'
+    flexDirection: 'column',
+    gap: '16px',
+    minWidth: 0
   },
   panelCard: {
     backgroundColor: '#ffffff',
-    borderRadius: '6px',
+    borderRadius: '8px',
     padding: '16px',
-    border: '1px solid #e2e8f0'
+    border: '1px solid #e2e8f0',
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)'
   },
   panelHeader: {
     display: 'flex',
@@ -3667,25 +3368,27 @@ const styles = {
   },
   panelTitle: {
     margin: 0,
-    fontSize: '12px',
-    fontWeight: '600',
-    color: '#0f172a'
+    fontSize: '13px',
+    fontWeight: '700',
+    color: '#0f172a',
+    whiteSpace: 'nowrap'
   },
   panelLink: {
     backgroundColor: 'transparent',
     border: 'none',
     color: '#64748b',
-    fontSize: '11px',
+    fontSize: '12px',
     fontWeight: '500',
-    cursor: 'pointer'
+    cursor: 'pointer',
+    whiteSpace: 'nowrap'
   },
   alertList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px'
+    gap: '8px'
   },
   alertItem: {
-    padding: '8px',
+    padding: '10px',
     borderRadius: '4px',
     backgroundColor: '#f8fafc',
     border: '1px solid #f1f5f9'
@@ -3697,11 +3400,11 @@ const styles = {
     marginBottom: '3px'
   },
   alertTime: {
-    fontSize: '10px',
-    color: '#94a3b8'
+    fontSize: '11px',
+    color: '#64748b'
   },
   alertRestroom: {
-    fontSize: '11px',
+    fontSize: '12px',
     fontWeight: '600',
     color: '#1e293b'
   },
@@ -3711,48 +3414,55 @@ const styles = {
     alignItems: 'center'
   },
   alertMemo: {
-    fontSize: '11px',
-    color: '#64748b'
+    fontSize: '12px',
+    color: '#475569',
+    lineHeight: '1.5'
   },
   checkBtn: {
     backgroundColor: '#ffffff',
     border: '1px solid #cbd5e1',
-    borderRadius: '3px',
-    padding: '2px 5px',
-    fontSize: '10px',
+    borderRadius: '6px',
+    padding: '4px 10px',
+    fontSize: '11px',
     color: '#334155',
-    cursor: 'pointer'
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    fontWeight: '600',
+    whiteSpace: 'nowrap'
   },
   checkedText: {
-    fontSize: '10px',
-    color: '#94a3b8',
+    fontSize: '11px',
+    color: '#64748b',
     fontWeight: '500'
   },
   cleaningList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px'
+    gap: '8px'
   },
   cleaningRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingBottom: '5px',
+    paddingBottom: '7px',
     borderBottom: '1px solid #f1f5f9'
   },
   cleaningName: {
-    fontSize: '11px',
+    fontSize: '12px',
     fontWeight: '500',
     color: '#334155'
   },
   cleaningStatusTicker: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
     gap: '8px'
   },
   tickerCard: {
     padding: '8px 10px',
-    borderRadius: '4px'
+    borderRadius: '8px'
   },
   cleanBtnSubmit: {
     width: '100%',
@@ -3760,7 +3470,7 @@ const styles = {
     backgroundColor: '#0f172a',
     color: '#fff',
     border: 'none',
-    borderRadius: '4px',
+    borderRadius: '6px',
     fontSize: '12px',
     fontWeight: '600',
     cursor: 'pointer',
@@ -3770,18 +3480,19 @@ const styles = {
     backgroundColor: '#f1f5f9',
     color: '#475569',
     padding: '2px 6px',
-    borderRadius: '3px',
-    fontSize: '10px',
+    borderRadius: '4px',
+    fontSize: '11px',
     fontWeight: '500'
   },
   chipBtn: {
     backgroundColor: '#f8fafc',
     border: '1px solid #e2e8f0',
     padding: '6px 8px',
-    borderRadius: '4px',
-    fontSize: '11px',
+    borderRadius: '6px',
+    fontSize: '12px',
     color: '#64748b',
-    cursor: 'pointer'
+    cursor: 'pointer',
+    whiteSpace: 'nowrap'
   },
   chipBtnActive: {
     backgroundColor: '#0f172a',
@@ -3804,7 +3515,8 @@ const styles = {
     fontWeight: '500',
     color: '#64748b',
     cursor: 'pointer',
-    borderRadius: '4px'
+    borderRadius: '6px',
+    whiteSpace: 'nowrap'
   },
   subTabBtnActive: {
     backgroundColor: '#f1f5f9',
@@ -3813,14 +3525,14 @@ const styles = {
   },
   thresholdGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
     gap: '14px',
     marginBottom: '16px'
   },
   thresholdCard: {
     backgroundColor: '#f8fafc',
     padding: '14px',
-    borderRadius: '6px',
+    borderRadius: '8px',
     border: '1px solid #e2e8f0'
   },
   thresholdCardTitle: {
@@ -3842,20 +3554,23 @@ const styles = {
     gap: '4px'
   },
   thresholdLabel: {
-    fontSize: '10px',
+    fontSize: '11px',
     color: '#64748b',
     fontWeight: '500'
   },
   thresholdInput: {
     padding: '5px 8px',
-    borderRadius: '4px',
+    borderRadius: '6px',
     border: '1px solid #cbd5e1',
     fontSize: '12px',
-    backgroundColor: '#ffffff'
+    backgroundColor: '#ffffff',
+    width: '100%',
+    boxSizing: 'border-box',
+    minWidth: 0
   },
   thresholdHelper: {
-    fontSize: '10px',
-    color: '#94a3b8',
+    fontSize: '11px',
+    color: '#64748b',
     marginTop: '10px'
   },
   systemForm: {
@@ -3892,7 +3607,7 @@ const styles = {
   systemInput: {
     width: '60px',
     padding: '5px 8px',
-    borderRadius: '4px',
+    borderRadius: '6px',
     border: '1px solid #cbd5e1',
     fontSize: '12px',
     marginRight: '6px',
@@ -3911,7 +3626,7 @@ const styles = {
     left: '14px',
     backgroundColor: '#ffffff',
     padding: '10px 14px',
-    borderRadius: '6px',
+    borderRadius: '8px',
     boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
     zIndex: 10,
     maxWidth: '260px',
@@ -3926,7 +3641,7 @@ const styles = {
   table: {
     width: '100%',
     backgroundColor: '#ffffff',
-    borderRadius: '6px',
+    borderRadius: '8px',
     borderCollapse: 'collapse',
     overflow: 'hidden',
     border: '1px solid #e2e8f0'
@@ -3940,14 +3655,15 @@ const styles = {
     textAlign: 'left',
     fontSize: '11px',
     fontWeight: '600',
-    color: '#64748b'
+    color: '#64748b',
+    whiteSpace: 'nowrap'
   },
   tr: {
     borderBottom: '1px solid #f1f5f9'
   },
   td: {
     padding: '8px 12px',
-    fontSize: '11px',
+    fontSize: '12px',
     color: '#334155'
   },
   primaryBtn: {
@@ -3955,22 +3671,30 @@ const styles = {
     color: '#fff',
     border: 'none',
     padding: '6px 12px',
-    borderRadius: '4px',
+    borderRadius: '6px',
     fontSize: '12px',
-    fontWeight: '500',
+    fontWeight: '600',
     cursor: 'pointer',
     display: 'inline-flex',
-    alignItems: 'center'
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    whiteSpace: 'nowrap'
   },
   secondaryBtn: {
     backgroundColor: '#ffffff',
     color: '#475569',
     border: '1px solid #cbd5e1',
-    padding: '5px 10px',
-    borderRadius: '4px',
-    fontSize: '11px',
-    fontWeight: '500',
-    cursor: 'pointer'
+    padding: '6px 12px',
+    borderRadius: '6px',
+    fontSize: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    whiteSpace: 'nowrap'
   },
   modalOverlay: {
     position: 'fixed',
@@ -3987,7 +3711,7 @@ const styles = {
   modalContent: {
     backgroundColor: '#ffffff',
     width: '380px',
-    borderRadius: '6px',
+    borderRadius: '8px',
     overflow: 'hidden',
     boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
     border: '1px solid #e2e8f0'
@@ -4005,7 +3729,7 @@ const styles = {
     fontSize: '18px',
     lineHeight: 1,
     cursor: 'pointer',
-    color: '#94a3b8'
+    color: '#64748b'
   },
   modalBody: {
     padding: '16px'
@@ -4023,7 +3747,7 @@ const styles = {
   formInput: {
     width: '100%',
     padding: '6px 8px',
-    borderRadius: '4px',
+    borderRadius: '6px',
     border: '1px solid #cbd5e1',
     fontSize: '12px',
     boxSizing: 'border-box'
@@ -4031,7 +3755,7 @@ const styles = {
   formSelect: {
     width: '100%',
     padding: '6px 8px',
-    borderRadius: '4px',
+    borderRadius: '6px',
     border: '1px solid #cbd5e1',
     fontSize: '12px',
     backgroundColor: '#fff',
@@ -4040,7 +3764,7 @@ const styles = {
   formInputReadOnly: {
     width: '100%',
     padding: '6px 8px',
-    borderRadius: '4px',
+    borderRadius: '6px',
     border: '1px solid #e2e8f0',
     backgroundColor: '#f8fafc',
     color: '#64748b',
@@ -4050,7 +3774,7 @@ const styles = {
   formTextarea: {
     width: '100%',
     padding: '6px 8px',
-    borderRadius: '4px',
+    borderRadius: '6px',
     border: '1px solid #cbd5e1',
     fontSize: '12px',
     boxSizing: 'border-box',
@@ -4083,7 +3807,7 @@ const styles = {
     width: '600px',
     maxWidth: '94vw',
     maxHeight: '90vh',
-    borderRadius: '10px',
+    borderRadius: '8px',
     boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
     border: '1px solid #e2e8f0',
     display: 'flex',
@@ -4127,20 +3851,25 @@ const styles = {
     marginTop: '5px',
     padding: '6px 10px',
     backgroundColor: '#f8fafc',
-    borderRadius: '4px',
+    borderRadius: '6px',
     fontSize: '11px',
     color: '#475569',
     border: '1px solid #e2e8f0'
   },
   cleanerQuickBtn: {
-    padding: '2px 8px',
+    padding: '4px 10px',
     fontSize: '11px',
-    fontWeight: '500',
+    fontWeight: '600',
     color: '#2563eb',
     backgroundColor: '#eff6ff',
     border: '1px solid #bfdbfe',
-    borderRadius: '4px',
-    cursor: 'pointer'
+    borderRadius: '6px',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    whiteSpace: 'nowrap'
   },
   cleanerGrid: {
     display: 'grid',
@@ -4149,18 +3878,18 @@ const styles = {
   },
   cleanerCard: {
     padding: '10px 12px',
-    borderRadius: '6px',
+    borderRadius: '8px',
     border: '1px solid #e2e8f0',
     cursor: 'pointer',
     transition: 'all 0.15s ease'
   },
   memoQuickBtn: {
     padding: '1px 6px',
-    fontSize: '10px',
+    fontSize: '11px',
     color: '#64748b',
     backgroundColor: '#f1f5f9',
     border: '1px solid #e2e8f0',
-    borderRadius: '3px',
+    borderRadius: '4px',
     cursor: 'pointer'
   }
 };
