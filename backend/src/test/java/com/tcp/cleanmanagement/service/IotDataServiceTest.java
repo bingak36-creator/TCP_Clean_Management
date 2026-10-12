@@ -12,6 +12,7 @@ import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import com.tcp.cleanmanagement.repository.SensorMetricRepository;
 import com.tcp.cleanmanagement.repository.SensorRepository;
+import com.tcp.cleanmanagement.repository.UpstashDeviceRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -40,6 +41,7 @@ class IotDataServiceTest {
     @Mock SensorMetricRepository metricRepository;
     @Mock SensorDataRawRepository dataRepository;
     @Mock ApplicationEventPublisher eventPublisher;
+    @Mock UpstashDeviceRepository upstashDeviceRepository;
     @InjectMocks IotDataService service;
 
     @Test

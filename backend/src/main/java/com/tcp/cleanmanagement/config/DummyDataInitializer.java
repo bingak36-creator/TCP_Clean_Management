@@ -15,6 +15,7 @@ import com.tcp.cleanmanagement.repository.SensorMetricRepository;
 import com.tcp.cleanmanagement.repository.ZoneRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,6 +24,7 @@ import java.time.ZoneOffset;
 import java.math.BigDecimal;
 
 @Component
+@ConditionalOnProperty(name = "app.seed-demo-data", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class DummyDataInitializer implements CommandLineRunner {
 

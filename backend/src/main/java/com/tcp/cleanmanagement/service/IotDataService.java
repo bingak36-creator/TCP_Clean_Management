@@ -13,6 +13,7 @@ import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
 import com.tcp.cleanmanagement.repository.SensorRepository;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import com.tcp.cleanmanagement.repository.SensorMetricRepository;
+import com.tcp.cleanmanagement.repository.UpstashDeviceRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
@@ -28,6 +29,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.Set;
 
 @Service
@@ -37,9 +39,18 @@ public class IotDataService {
     private final SensorMetricRepository metricRepository;
     private final SensorDataRawRepository dataRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final UpstashDeviceRepository upstashDeviceRepository;
 
     @Transactional(readOnly = true)
     public DeviceSetResponse getDeviceSetByMac(String mac) {
+        var registered = upstashDeviceRepository.findById(mac.toUpperCase(Locale.ROOT));
+        if (registered.isPresent()) {
+            var device = registered.get();
+            return DeviceSetResponse.builder().macAddress(device.getMacAddress())
+                    .setCode("ESP32_" + device.getMacAddress().replace(":", ""))
+                    .sensorIds(Map.of("DHT11", device.getTemperatureHumiditySensor().getId(),
+                            "MQ135", device.getGasSensor().getId())).build();
+        }
         // The upstream demo uses one shared device set; resolve IDs by type so
         // databases migrated from the metric-based schema remain compatible.
         List<Sensor> sensors = sensorRepository.findAll().stream()

@@ -17,3 +17,14 @@ spring:
       host: localhost
       port: 6379
       password: redispass
+
+iot:
+  upstash:
+    redis-url: ${UPSTASH_REDIS_URL:${UPSTASH_REDIS_REST_URL:}}
+    rest-token: ${UPSTASH_REDIS_REST_TOKEN:}
+    poll-interval-ms: ${UPSTASH_POLL_INTERVAL_MS:120000}
+    batch-size: ${UPSTASH_BATCH_SIZE:200}
+    discovery-interval-ms: ${UPSTASH_DISCOVERY_INTERVAL_MS:300000}
+
+app:
+  seed-demo-data: ${SEED_DEMO_DATA:true}
