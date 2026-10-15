@@ -2,15 +2,18 @@ package com.tcp.cleanmanagement.service;
 
 import com.tcp.cleanmanagement.dto.DeviceSetResponse;
 import com.tcp.cleanmanagement.dto.SensorDataRequest;
+import com.tcp.cleanmanagement.entity.DeviceSet;
 import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.SensorMetric;
 import com.tcp.cleanmanagement.entity.DeviceSetHistory;
 import com.tcp.cleanmanagement.enums.MetricCode;
+import com.tcp.cleanmanagement.enums.SensorModel;
 import com.tcp.cleanmanagement.enums.SensorStatus;
 import com.tcp.cleanmanagement.enums.SensorType;
 import com.tcp.cleanmanagement.enums.TimeSource;
 import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
+import com.tcp.cleanmanagement.repository.DeviceSetRepository;
 import com.tcp.cleanmanagement.repository.SensorRepository;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import com.tcp.cleanmanagement.repository.SensorMetricRepository;
@@ -32,6 +35,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 @Service
@@ -43,16 +47,45 @@ public class IotDataService {
     private final ApplicationEventPublisher eventPublisher;
     private final UpstashDeviceRepository upstashDeviceRepository;
     private final DeviceSetHistoryRepository historyRepository;
+    private final DeviceSetRepository deviceSetRepository;
 
     @Transactional(readOnly = true)
     public DeviceSetResponse getDeviceSetByMac(String mac) {
-        var registered = upstashDeviceRepository.findById(mac.toUpperCase(Locale.ROOT));
-        if (registered.isPresent()) {
-            var device = registered.get();
-            return DeviceSetResponse.builder().macAddress(device.getMacAddress())
-                    .setCode("ESP32_" + device.getMacAddress().replace(":", ""))
-                    .sensorIds(Map.of("DHT11", device.getTemperatureHumiditySensor().getId(),
-                            "MQ135", device.getGasSensor().getId())).build();
+        String normalizedMac = (mac != null && mac.matches("[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}"))
+                ? mac.toUpperCase(Locale.ROOT) : (mac != null ? mac.trim() : "");
+        if (!normalizedMac.isEmpty()) {
+            Optional<DeviceSet> registeredSet = deviceSetRepository.findByMacAddress(normalizedMac);
+            if (registeredSet.isPresent()) {
+                DeviceSet set = registeredSet.get();
+                Map<String, Long> ids = new HashMap<>();
+                for (Sensor sensor : sensorRepository.findByDeviceSetIdOrderByIdAsc(set.getId())) {
+                    if (sensor.getSensorModel() != null) {
+                        ids.put(sensor.getSensorModel().name(), sensor.getId());
+                    } else if (sensor.getSensorType() == SensorType.TEMP_HUMID) {
+                        ids.put("DHT11", sensor.getId());
+                    } else if (sensor.getSensorType() == SensorType.GAS) {
+                        ids.put("MQ135", sensor.getId());
+                    }
+                }
+                return DeviceSetResponse.builder()
+                        .deviceSetId(set.getId())
+                        .setCode(set.getSetCode())
+                        .macAddress(set.getMacAddress())
+                        .zoneId(set.getZone() != null ? set.getZone().getId() : null)
+                        .zoneName(set.getZone() != null ? set.getZone().getName() : null)
+                        .installationLabel(set.getInstallationLabel())
+                        .sensorIds(ids)
+                        .build();
+            }
+
+            var registered = upstashDeviceRepository.findById(normalizedMac);
+            if (registered.isPresent()) {
+                var device = registered.get();
+                return DeviceSetResponse.builder().macAddress(device.getMacAddress())
+                        .setCode("ESP32_" + device.getMacAddress().replace(":", ""))
+                        .sensorIds(Map.of("DHT11", device.getTemperatureHumiditySensor().getId(),
+                                "MQ135", device.getGasSensor().getId())).build();
+            }
         }
         // The upstream demo uses one shared device set; resolve IDs by type so
         // databases migrated from the metric-based schema remain compatible.

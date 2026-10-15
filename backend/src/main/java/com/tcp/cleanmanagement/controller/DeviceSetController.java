@@ -38,9 +38,4 @@ public class DeviceSetController {
     public List<DeviceSetHistoryResponse> history(@PathVariable Long deviceSetId) {
         return deviceSetService.history(deviceSetId);
     }
-
-    @GetMapping("/api/iot/device-sets/by-mac/{macAddress}")
-    public DeviceSetResponse configuration(@PathVariable String macAddress) {
-        return deviceSetService.configurationFor(macAddress);
-    }
 }
