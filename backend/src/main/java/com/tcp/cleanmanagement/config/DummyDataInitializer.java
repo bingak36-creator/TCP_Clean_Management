@@ -69,6 +69,7 @@ public class DummyDataInitializer implements CommandLineRunner {
 
             saveGasReading(sensor1, "10");
             saveGasReading(sensor2, "300");
+            saveTempHumidReading(sensor3, "24.5", "55.0");
 
             System.out.println("[DummyDataInitializer] Dummy Zones, Sensors, and Data generated.");
         }
@@ -79,8 +80,25 @@ public class DummyDataInitializer implements CommandLineRunner {
                 .sensor(sensor).metricCode(MetricCode.GAS).unitCode("UNVERIFIED").build());
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         sensorDataRawRepository.save(SensorDataRaw.builder()
-                .metric(metric).sampleKey("dummy-initial-data")
+                .metric(metric).sampleKey("dummy-initial-data-" + sensor.getId())
                 .measuredValue(new BigDecimal(value))
+                .measuredAt(now).receivedAt(now).timeSource(TimeSource.SERVER).build());
+    }
+
+    private void saveTempHumidReading(Sensor sensor, String temp, String humid) {
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        SensorMetric tempMetric = sensorMetricRepository.save(SensorMetric.builder()
+                .sensor(sensor).metricCode(MetricCode.TEMPERATURE).unitCode("CELSIUS").build());
+        sensorDataRawRepository.save(SensorDataRaw.builder()
+                .metric(tempMetric).sampleKey("dummy-init-temp-" + sensor.getId())
+                .measuredValue(new BigDecimal(temp))
+                .measuredAt(now).receivedAt(now).timeSource(TimeSource.SERVER).build());
+
+        SensorMetric humidMetric = sensorMetricRepository.save(SensorMetric.builder()
+                .sensor(sensor).metricCode(MetricCode.HUMIDITY).unitCode("PERCENT").build());
+        sensorDataRawRepository.save(SensorDataRaw.builder()
+                .metric(humidMetric).sampleKey("dummy-init-humid-" + sensor.getId())
+                .measuredValue(new BigDecimal(humid))
                 .measuredAt(now).receivedAt(now).timeSource(TimeSource.SERVER).build());
     }
 }
