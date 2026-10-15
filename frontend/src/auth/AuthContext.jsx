@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
 const AuthContext = createContext(null);
-const DEMO_LOGIN_ENABLED = import.meta.env.DEV || import.meta.env.VITE_DEMO_AUTH === 'true';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+const DEMO_LOGIN_ENABLED = true; // 배포 및 시연 환경에서 상시 데모 로그인 지원
 
 export const ROLES = {
   DEVELOPER: 'DEVELOPER',
@@ -61,9 +62,10 @@ export function AuthProvider({ children }) {
       }
 
       try {
-        const res = await fetch('/api/auth/me', {
+        const res = await fetch(`${API_BASE}/api/auth/me`, {
           headers: {
-            'Authorization': `Bearer ${storedToken}`
+            'Authorization': `Bearer ${storedToken}`,
+            'ngrok-skip-browser-warning': 'true'
           }
         });
 
@@ -87,9 +89,12 @@ export function AuthProvider({ children }) {
 
   const login = async (username, password) => {
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true'
+        },
         body: JSON.stringify({ username, password })
       });
 
@@ -125,7 +130,9 @@ export function AuthProvider({ children }) {
 
         if (mockUser) {
           mockUser.isDemo = true;
-          const devices = await fetch('/api/iot/devices').then(response => response.ok ? response.json() : []).catch(() => []);
+          const devices = await fetch(`${API_BASE}/api/iot/devices`, {
+            headers: { 'ngrok-skip-browser-warning': 'true' }
+          }).then(response => response.ok ? response.json() : []).catch(() => []);
           mockUser.zoneIds = devices.map(device => device.zoneId);
           const fakeToken = 'mock-jwt-token-' + mockUser.role;
           setToken(fakeToken);

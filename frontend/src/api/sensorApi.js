@@ -1,7 +1,12 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
 async function getJson(path, signal) {
-  const response = await fetch(`${API_BASE}${path}`, { signal });
+  const response = await fetch(`${API_BASE}${path}`, {
+    signal,
+    headers: {
+      'ngrok-skip-browser-warning': 'true'
+    }
+  });
   if (!response.ok) throw new Error(`센서 데이터 조회 실패 (HTTP ${response.status})`);
   return response.json();
 }
