@@ -65,14 +65,19 @@ void saveConfigCallback() {
 
 // 서버 주소 반환 (도메인 또는 IP, HTTP/HTTPS 및 ngrok/Cloudflare 자동 판별)
 String getServerUrl() {
-  if (serverIp.startsWith("http://") || serverIp.startsWith("https://")) {
-    return serverIp;
+  String clean = serverIp;
+  clean.trim();
+  while (clean.endsWith("/")) {
+    clean.remove(clean.length() - 1);
+  }
+  if (clean.startsWith("http://") || clean.startsWith("https://")) {
+    return clean;
   }
   // ngrok 및 Cloudflare 터널, 포트 443은 HTTPS 사용
-  if (serverPort == "443" || serverIp.indexOf(".trycloudflare.com") != -1 || serverIp.indexOf(".ngrok-free.app") != -1) {
-    return "https://" + serverIp;
+  if (serverPort == "443" || clean.indexOf(".trycloudflare.com") != -1 || clean.indexOf(".ngrok") != -1) {
+    return "https://" + clean;
   }
-  return "http://" + serverIp + ":" + serverPort;
+  return "http://" + clean + ":" + serverPort;
 }
 
 void connectWifi() {
