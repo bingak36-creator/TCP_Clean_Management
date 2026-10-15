@@ -9,6 +9,8 @@ import com.tcp.cleanmanagement.enums.SensorType;
 import com.tcp.cleanmanagement.enums.SensorStatus;
 import com.tcp.cleanmanagement.enums.TimeSource;
 import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
+import com.tcp.cleanmanagement.repository.DeviceSetHistoryRepository;
+import com.tcp.cleanmanagement.repository.DeviceSetRepository;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import com.tcp.cleanmanagement.repository.SensorMetricRepository;
 import com.tcp.cleanmanagement.repository.SensorRepository;
@@ -42,6 +44,8 @@ class IotDataServiceTest {
     @Mock SensorDataRawRepository dataRepository;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock UpstashDeviceRepository upstashDeviceRepository;
+    @Mock DeviceSetRepository deviceSetRepository;
+    @Mock DeviceSetHistoryRepository historyRepository;
     @InjectMocks IotDataService service;
 
     @Test
@@ -56,6 +60,7 @@ class IotDataServiceTest {
 
         assertEquals("AA:BB:CC:DD:EE:FF", response.getMacAddress());
         assertEquals(21L, response.getSensorIds().get("DHT11"));
+        assertEquals(21L, response.getSensorIds().get("DHT22"));
         assertEquals(40L, response.getSensorIds().get("MQ135"));
         assertEquals(50L, response.getSensorIds().get("MQ7"));
     }

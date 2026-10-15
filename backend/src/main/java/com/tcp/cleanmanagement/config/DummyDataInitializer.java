@@ -4,6 +4,7 @@ import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.SensorMetric;
 import com.tcp.cleanmanagement.entity.Zone;
+import com.tcp.cleanmanagement.enums.SensorModel;
 import com.tcp.cleanmanagement.enums.SensorStatus;
 import com.tcp.cleanmanagement.enums.MetricCode;
 import com.tcp.cleanmanagement.enums.TimeSource;
@@ -60,9 +61,9 @@ public class DummyDataInitializer implements CommandLineRunner {
             zoneRepository.save(zone1);
             zoneRepository.save(zone2);
 
-            Sensor sensor1 = Sensor.builder().zone(zone1).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build();
-            Sensor sensor2 = Sensor.builder().zone(zone2).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build();
-            Sensor sensor3 = Sensor.builder().zone(zone1).sensorType(SensorType.TEMP_HUMID).status(SensorStatus.ACTIVE).build();
+            Sensor sensor1 = Sensor.builder().zone(zone1).sensorType(SensorType.GAS).sensorModel(SensorModel.MQ135).status(SensorStatus.ACTIVE).build();
+            Sensor sensor2 = Sensor.builder().zone(zone2).sensorType(SensorType.GAS).sensorModel(SensorModel.MQ7).status(SensorStatus.ACTIVE).build();
+            Sensor sensor3 = Sensor.builder().zone(zone1).sensorType(SensorType.TEMP_HUMID).sensorModel(SensorModel.DHT22).status(SensorStatus.ACTIVE).build();
             sensorRepository.save(sensor1);
             sensorRepository.save(sensor2);
             sensorRepository.save(sensor3);

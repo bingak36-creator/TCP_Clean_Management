@@ -53,7 +53,7 @@ public class IotDataService {
     public DeviceSetResponse getDeviceSetByMac(String mac) {
         String normalizedMac = (mac != null && mac.matches("[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}"))
                 ? mac.toUpperCase(Locale.ROOT) : (mac != null ? mac.trim() : "");
-        if (!normalizedMac.isEmpty()) {
+        if (!normalizedMac.isEmpty() && deviceSetRepository != null) {
             Optional<DeviceSet> registeredSet = deviceSetRepository.findByMacAddress(normalizedMac);
             if (registeredSet.isPresent()) {
                 DeviceSet set = registeredSet.get();
@@ -61,8 +61,12 @@ public class IotDataService {
                 for (Sensor sensor : sensorRepository.findByDeviceSetIdOrderByIdAsc(set.getId())) {
                     if (sensor.getSensorModel() != null) {
                         ids.put(sensor.getSensorModel().name(), sensor.getId());
+                        if (sensor.getSensorModel() == SensorModel.DHT22) {
+                            ids.put("DHT11", sensor.getId());
+                        }
                     } else if (sensor.getSensorType() == SensorType.TEMP_HUMID) {
                         ids.put("DHT11", sensor.getId());
+                        ids.put("DHT22", sensor.getId());
                     } else if (sensor.getSensorType() == SensorType.GAS) {
                         ids.put("MQ135", sensor.getId());
                     }
@@ -81,10 +85,13 @@ public class IotDataService {
             var registered = upstashDeviceRepository.findById(normalizedMac);
             if (registered.isPresent()) {
                 var device = registered.get();
+                Map<String, Long> ids = new HashMap<>();
+                ids.put("DHT11", device.getTemperatureHumiditySensor().getId());
+                ids.put("DHT22", device.getTemperatureHumiditySensor().getId());
+                ids.put("MQ135", device.getGasSensor().getId());
                 return DeviceSetResponse.builder().macAddress(device.getMacAddress())
                         .setCode("ESP32_" + device.getMacAddress().replace(":", ""))
-                        .sensorIds(Map.of("DHT11", device.getTemperatureHumiditySensor().getId(),
-                                "MQ135", device.getGasSensor().getId())).build();
+                        .sensorIds(ids).build();
             }
         }
         // The upstream demo uses one shared device set; resolve IDs by type so
@@ -95,7 +102,10 @@ public class IotDataService {
                 .toList();
         Map<String, Long> sensorMap = new HashMap<>();
         sensors.stream().filter(sensor -> sensor.getSensorType() == SensorType.TEMP_HUMID)
-                .findFirst().ifPresent(sensor -> sensorMap.put("DHT11", sensor.getId()));
+                .findFirst().ifPresent(sensor -> {
+                    sensorMap.put("DHT11", sensor.getId());
+                    sensorMap.put("DHT22", sensor.getId());
+                });
         List<Sensor> gasSensors = sensors.stream()
                 .filter(sensor -> sensor.getSensorType() == SensorType.GAS).limit(2).toList();
         if (!gasSensors.isEmpty()) sensorMap.put("MQ135", gasSensors.get(0).getId());
