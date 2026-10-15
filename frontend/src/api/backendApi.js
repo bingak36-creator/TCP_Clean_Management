@@ -1,4 +1,4 @@
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 // 두 좌표 간 거리 계산 함수 (미터 단위)
 function getDistanceInMeters(lat1, lon1, lat2, lon2) {
@@ -25,20 +25,20 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
  */
 export const fetchBackendZones = async (category, userLat = null, userLon = null) => {
   try {
-    const zoneType = category === 'restroom' ? 'TOILET' : 'SMOKING';
-    const response = await fetch(`${BASE_URL}/api/public/zones?type=${zoneType}`, {
+    const zoneType = category === 'all' ? '' : category === 'restroom' ? 'TOILET' : 'SMOKING';
+    const response = await fetch(`${BASE_URL}/api/public/zones${zoneType ? `?type=${zoneType}` : ''}`, {
       headers: {
         'ngrok-skip-browser-warning': 'true'
       }
     });
-    
+
     if (!response.ok) {
       throw new Error(`백엔드 통신 오류: HTTP ${response.status}`);
     }
-    
+
     const data = await response.json();
 
-    return data.map((item) => {
+    return data.filter(item => Number.isFinite(item.latitude) && Number.isFinite(item.longitude)).map((item) => {
       const distance = userLat && userLon ? getDistanceInMeters(userLat, userLon, item.latitude, item.longitude) : null;
       return {
         id: `iot-${item.zoneId}`,
@@ -48,12 +48,11 @@ export const fetchBackendZones = async (category, userLat = null, userLon = null
         address: item.name,
         distance: distance,
         type: category,
-        temp: item.temp != null ? item.temp : 22,
-        humidity: item.humidity != null ? item.humidity : 50,
-        gas: item.gasLevel != null ? `${item.gasLevel}ppm (${item.status})` : '정상',
-        airQuality: item.gasLevel != null && item.gasLevel > 200 ? '나쁨' : '보통',
-        people: category === 'smoking' ? 2 : undefined,
-        status: item.status || (category === 'restroom' ? '쾌적' : '여유'),
+        temp: item.temp,
+        humidity: item.humidity,
+        gas: item.gasLevel != null ? `${item.gasLevel} ADC` : '측정 없음',
+        airQuality: '보정 전 센서값',
+        status: item.status || '측정 없음',
         color: item.color || (category === 'restroom' ? '#10b981' : '#3b82f6'),
         isOurSolution: item.isOurSolution ?? true
       };

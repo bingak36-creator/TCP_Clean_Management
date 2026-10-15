@@ -2,27 +2,36 @@ package com.tcp.cleanmanagement.config;
 
 import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
+import com.tcp.cleanmanagement.entity.SensorMetric;
 import com.tcp.cleanmanagement.entity.Zone;
 import com.tcp.cleanmanagement.enums.SensorStatus;
+import com.tcp.cleanmanagement.enums.MetricCode;
+import com.tcp.cleanmanagement.enums.TimeSource;
 import com.tcp.cleanmanagement.enums.SensorType;
 import com.tcp.cleanmanagement.enums.ZoneType;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import com.tcp.cleanmanagement.repository.SensorRepository;
+import com.tcp.cleanmanagement.repository.SensorMetricRepository;
 import com.tcp.cleanmanagement.repository.ZoneRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.math.BigDecimal;
 
 @Component
+@ConditionalOnProperty(name = "app.seed-demo-data", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class DummyDataInitializer implements CommandLineRunner {
 
     private final ZoneRepository zoneRepository;
     private final SensorRepository sensorRepository;
     private final SensorDataRawRepository sensorDataRawRepository;
+    private final SensorMetricRepository sensorMetricRepository;
 
     @Override
     @Transactional
@@ -58,22 +67,20 @@ public class DummyDataInitializer implements CommandLineRunner {
             sensorRepository.save(sensor2);
             sensorRepository.save(sensor3);
 
-            SensorDataRaw data1 = SensorDataRaw.builder()
-                    .sensor(sensor1)
-                    .value1(10.0f) // Gas (low)
-                    .measuredAt(LocalDateTime.now())
-                    .build();
-            
-            SensorDataRaw data2 = SensorDataRaw.builder()
-                    .sensor(sensor2)
-                    .value1(300.0f) // Gas (high)
-                    .measuredAt(LocalDateTime.now())
-                    .build();
+            saveGasReading(sensor1, "10");
+            saveGasReading(sensor2, "300");
 
-            sensorDataRawRepository.save(data1);
-            sensorDataRawRepository.save(data2);
-            
             System.out.println("[DummyDataInitializer] Dummy Zones, Sensors, and Data generated.");
         }
+    }
+
+    private void saveGasReading(Sensor sensor, String value) {
+        SensorMetric metric = sensorMetricRepository.save(SensorMetric.builder()
+                .sensor(sensor).metricCode(MetricCode.GAS).unitCode("UNVERIFIED").build());
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        sensorDataRawRepository.save(SensorDataRaw.builder()
+                .metric(metric).sampleKey("dummy-initial-data")
+                .measuredValue(new BigDecimal(value))
+                .measuredAt(now).receivedAt(now).timeSource(TimeSource.SERVER).build());
     }
 }

@@ -2,7 +2,7 @@
 
 검토 기준: `main`의 `9c77a60c4d911550411281b731a8c8bc138ef2cf` (2026-09-28 클론).
 
-**현재 JPA 엔티티 8개를 바탕으로 만든 11개 테이블의 개선 설계다.** 이 디렉터리의 SQL은 빈 DB에서 검증하는 목표 스키마이며, 현재 애플리케이션에 바로 적용하는 마이그레이션은 아니다. 백엔드 엔티티와 API는 아직 기존 구조다.
+**기존 JPA 엔티티 8개를 바탕으로 만든 11개 테이블의 개선 설계다.** 이 디렉터리의 SQL은 빈 DB에서 검증하는 목표 스키마이며, 현재 애플리케이션에 바로 적용하는 마이그레이션은 아니다. 측정 항목·원본·집계와 IoT 수집 API는 백엔드에 적용됐고, 기존 DB용 SQL은 [`backend/db/migrate_metric_readings.sql`](../../backend/db/migrate_metric_readings.sql)에 있다. 계정·알림·조치·푸시 등의 v2 설계는 아직 백엔드에 적용되지 않았다.
 
 - [확대·축소 및 테이블 상세 보기](index.html)
 - [관계도 PNG](erd-overview.png) · [벡터 SVG](erd-overview.svg)

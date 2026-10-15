@@ -4,32 +4,66 @@ import com.tcp.cleanmanagement.dto.DeviceSetResponse;
 import com.tcp.cleanmanagement.dto.SensorDataRequest;
 import com.tcp.cleanmanagement.entity.Sensor;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
+import com.tcp.cleanmanagement.entity.SensorMetric;
+import com.tcp.cleanmanagement.enums.MetricCode;
+import com.tcp.cleanmanagement.enums.SensorStatus;
+import com.tcp.cleanmanagement.enums.SensorType;
+import com.tcp.cleanmanagement.enums.TimeSource;
 import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
 import com.tcp.cleanmanagement.repository.SensorRepository;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
+import com.tcp.cleanmanagement.repository.SensorMetricRepository;
+import com.tcp.cleanmanagement.repository.UpstashDeviceRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.HashSet;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Locale;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class IotDataService {
     private final SensorRepository sensorRepository;
+    private final SensorMetricRepository metricRepository;
     private final SensorDataRawRepository dataRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final UpstashDeviceRepository upstashDeviceRepository;
 
     @Transactional(readOnly = true)
     public DeviceSetResponse getDeviceSetByMac(String mac) {
-        // ESP32 MAC 주소 기반 센서 ID 매핑 반환
+        var registered = upstashDeviceRepository.findById(mac.toUpperCase(Locale.ROOT));
+        if (registered.isPresent()) {
+            var device = registered.get();
+            return DeviceSetResponse.builder().macAddress(device.getMacAddress())
+                    .setCode("ESP32_" + device.getMacAddress().replace(":", ""))
+                    .sensorIds(Map.of("DHT11", device.getTemperatureHumiditySensor().getId(),
+                            "MQ135", device.getGasSensor().getId())).build();
+        }
+        // The upstream demo uses one shared device set; resolve IDs by type so
+        // databases migrated from the metric-based schema remain compatible.
+        List<Sensor> sensors = sensorRepository.findAll().stream()
+                .filter(sensor -> sensor.getStatus() == SensorStatus.ACTIVE)
+                .sorted(Comparator.comparing(Sensor::getId))
+                .toList();
         Map<String, Long> sensorMap = new HashMap<>();
-        sensorMap.put("DHT11", 1L); // 온습도 센서 ID
-        sensorMap.put("MQ135", 2L); // 공기질/가스 센서 ID
-        sensorMap.put("MQ7", 3L);   // 일산화탄소 센서 ID
+        sensors.stream().filter(sensor -> sensor.getSensorType() == SensorType.TEMP_HUMID)
+                .findFirst().ifPresent(sensor -> sensorMap.put("DHT11", sensor.getId()));
+        List<Sensor> gasSensors = sensors.stream()
+                .filter(sensor -> sensor.getSensorType() == SensorType.GAS).limit(2).toList();
+        if (!gasSensors.isEmpty()) sensorMap.put("MQ135", gasSensors.get(0).getId());
+        if (gasSensors.size() > 1) sensorMap.put("MQ7", gasSensors.get(1).getId());
 
         return DeviceSetResponse.builder()
                 .macAddress(mac)
@@ -40,41 +74,77 @@ public class IotDataService {
 
     @Transactional
     public void saveSensorData(Long sensorId, SensorDataRequest request) {
-        Sensor sensor = sensorRepository.findById(sensorId)
-                .orElseGet(() -> {
-                    // ID가 존재하지 않으면 1번 기본 센서로 fallback
-                    return sensorRepository.findAll().stream().findFirst()
-                            .orElseThrow(() -> new IllegalArgumentException("No sensor available in DB"));
-                });
+        Sensor sensor = sensorRepository.findByIdForUpdate(sensorId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Sensor not found"));
+        if (request == null || request.getSampleKey() == null || request.getReadings() == null
+                || request.getReadings().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A sample key and readings are required");
+        }
 
-        Float val1 = request.getValue1();
-        Float val2 = request.getValue2();
-
-        // ESP32 배열 형태의 readings 파싱 지원
-        if (request.getReadings() != null && !request.getReadings().isEmpty()) {
-            for (SensorDataRequest.MetricReading r : request.getReadings()) {
-                if (r.getMetricCode() != null && r.getMeasuredValue() != null) {
-                    if ("TEMPERATURE".equalsIgnoreCase(r.getMetricCode())) {
-                        val1 = r.getMeasuredValue();
-                    } else if ("HUMIDITY".equalsIgnoreCase(r.getMetricCode())) {
-                        val2 = r.getMeasuredValue();
-                    } else if ("GAS".equalsIgnoreCase(r.getMetricCode())) {
-                        val1 = r.getMeasuredValue();
-                    }
-                }
+        Set<MetricCode> allowed = switch (sensor.getSensorType()) {
+            case GAS -> Set.of(MetricCode.GAS);
+            case TEMP_HUMID -> Set.of(MetricCode.TEMPERATURE, MetricCode.HUMIDITY);
+            case MAG -> Set.of(MetricCode.CONTACT);
+        };
+        Set<MetricCode> seen = new HashSet<>();
+        for (SensorDataRequest.Reading reading : request.getReadings()) {
+            if (reading == null || reading.getMeasuredValue() == null || !allowed.contains(reading.getMetricCode())
+                    || !seen.add(reading.getMetricCode())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid or duplicate metric for sensor type");
+            }
+            if (reading.getMetricCode() == MetricCode.HUMIDITY
+                    && (reading.getMeasuredValue().signum() < 0
+                    || reading.getMeasuredValue().compareTo(BigDecimal.valueOf(100)) > 0)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Humidity must be between 0 and 100");
+            }
+            if (reading.getMetricCode() == MetricCode.CONTACT
+                    && !(reading.getMeasuredValue().compareTo(BigDecimal.ZERO) == 0
+                    || reading.getMeasuredValue().compareTo(BigDecimal.ONE) == 0)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Contact must be 0 or 1");
             }
         }
 
-        SensorDataRaw rawData = SensorDataRaw.builder()
-                .sensor(sensor)
-                .value1(val1 != null ? val1 : 0.0f)
-                .value2(val2 != null ? val2 : 0.0f)
-                .measuredAt(LocalDateTime.now())
-                .build();
+        LocalDateTime receivedAt = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime measuredAt = request.getMeasuredAt() == null
+                ? receivedAt : request.getMeasuredAt().withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        TimeSource timeSource = request.getMeasuredAt() == null ? TimeSource.SERVER : TimeSource.DEVICE;
 
-        SensorDataRaw savedData = dataRepository.save(rawData);
-        
-        // Publish event for async analysis
-        eventPublisher.publishEvent(new SensorDataSavedEvent(savedData));
+        for (SensorDataRequest.Reading reading : request.getReadings()) {
+            MetricCode code = reading.getMetricCode();
+            SensorMetric metric = metricRepository.findBySensorIdAndMetricCode(sensorId, code)
+                    .orElseGet(() -> metricRepository.save(SensorMetric.builder()
+                            .sensor(sensor)
+                            .metricCode(code)
+                            .unitCode(unitFor(code))
+                            .build()));
+
+            var existing = dataRepository.findByMetricIdAndSampleKey(metric.getId(), request.getSampleKey());
+            if (existing.isPresent()) {
+                if (existing.get().getMeasuredValue().compareTo(reading.getMeasuredValue()) != 0
+                        || (request.getMeasuredAt() != null && !existing.get().getMeasuredAt().equals(measuredAt))) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Sample key already has another value");
+                }
+                continue;
+            }
+
+            SensorDataRaw saved = dataRepository.save(SensorDataRaw.builder()
+                    .metric(metric)
+                    .sampleKey(request.getSampleKey())
+                    .measuredValue(reading.getMeasuredValue())
+                    .measuredAt(measuredAt)
+                    .receivedAt(receivedAt)
+                    .timeSource(timeSource)
+                    .build());
+            eventPublisher.publishEvent(new SensorDataSavedEvent(saved.getId()));
+        }
+    }
+
+    private String unitFor(MetricCode code) {
+        return switch (code) {
+            case GAS -> "UNVERIFIED";
+            case TEMPERATURE -> "CELSIUS";
+            case HUMIDITY -> "PERCENT";
+            case CONTACT -> "BINARY";
+        };
     }
 }

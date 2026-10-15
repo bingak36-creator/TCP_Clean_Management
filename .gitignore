@@ -40,6 +40,7 @@ backend/.gradle/
 backend/build/
 backend/out/
 backend/bin/
+backend/scripts/__pycache__/
 backend/src/main/generated/
 
 # Log files
@@ -89,6 +90,10 @@ redis-data/
 *.pem
 credentials.json
 client_secret.json
+
+# ESP32 device-specific connection secret (use the example header)
+arduino/**/device_config.h
+arduino/**/build/
 
 # OS generated files
 .DS_Store

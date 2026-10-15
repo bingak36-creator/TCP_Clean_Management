@@ -21,7 +21,7 @@ public class PublicZoneController {
             @RequestParam(required = false) ZoneType type,
             @RequestParam(required = false) Double lat,
             @RequestParam(required = false) Double lng,
-            @RequestParam(required = false, defaultValue = "2.0") Double radius) { 
+            @RequestParam(required = false, defaultValue = "2.0") Double radius) { // 기본 반경 2km
         
         return ResponseEntity.ok(publicZoneService.getZones(type, lat, lng, radius));
     }

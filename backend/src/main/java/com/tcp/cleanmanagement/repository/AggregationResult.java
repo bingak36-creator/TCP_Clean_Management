@@ -1,9 +1,11 @@
 package com.tcp.cleanmanagement.repository;
 
+import java.math.BigDecimal;
+
 public interface AggregationResult {
-    Long getSensorId();
-    Double getAvgValue1();
-    Double getMaxValue1();
-    Double getAvgValue2();
-    Double getMaxValue2();
+    Long getMetricId();
+    Long getSampleCount();
+    BigDecimal getSumValue();
+    BigDecimal getMinValue();
+    BigDecimal getMaxValue();
 }

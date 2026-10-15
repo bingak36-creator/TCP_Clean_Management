@@ -4,6 +4,7 @@ import com.tcp.cleanmanagement.dto.ZonePublicResponse;
 import com.tcp.cleanmanagement.dto.ZoneStatusResponse;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.Zone;
+import com.tcp.cleanmanagement.enums.MetricCode;
 import com.tcp.cleanmanagement.enums.ZoneType;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import com.tcp.cleanmanagement.repository.ZoneRepository;
@@ -24,7 +25,8 @@ public class PublicZoneService {
     @Transactional(readOnly = true)
     public List<ZonePublicResponse> getZones(ZoneType type, Double lat, Double lng, Double radius) {
         List<Zone> zones;
-        
+
+        // 위치 정보가 들어왔다면 반경 검색 수행, 아니면 전체 반환
         if (lat != null && lng != null && radius != null) {
             if (type != null) {
                 zones = zoneRepository.findZonesByTypeAndRadius(type.name(), lat, lng, radius);
@@ -52,30 +54,41 @@ public class PublicZoneService {
                 .longitude(zone.getLongitude())
                 .isOurSolution(zone.getIsOurSolution());
 
-        Optional<SensorDataRaw> latestData = sensorDataRawRepository.findFirstBySensorZoneIdOrderByMeasuredAtDesc(zone.getId());
-        
+        Optional<SensorDataRaw> latestData = latestReading(zone.getId(), MetricCode.GAS);
+        latestReading(zone.getId(), MetricCode.TEMPERATURE)
+                .ifPresent(data -> builder.temp(data.getMeasuredValue().floatValue()));
+        latestReading(zone.getId(), MetricCode.HUMIDITY)
+                .ifPresent(data -> builder.humidity(data.getMeasuredValue().floatValue()));
+
         if (latestData.isPresent()) {
             SensorDataRaw data = latestData.get();
-            // Assuming value1 is gas/odor level for simplicity in public UI
-            builder.gasLevel(data.getValue1());
-            builder.temp(22.0f); // Default temp
-            builder.humidity(50.0f); // Default humidity
-            
+            float gasLevel = data.getMeasuredValue().floatValue();
+            builder.gasLevel(gasLevel);
+
             if (zone.getZoneType() == ZoneType.TOILET) {
-                boolean isClean = (data.getValue1() == null || data.getValue1() < zone.getPleasantThreshold());
-                builder.status(isClean ? "Clean" : "Needs Cleaning");
-                builder.color(isClean ? "#10b981" : "#ef4444");
+                if (zone.getPleasantThreshold() == null) {
+                    builder.status("Unknown").color("#9ca3af");
+                } else {
+                    boolean isClean = gasLevel < zone.getPleasantThreshold();
+                    builder.status(isClean ? "Clean" : "Needs Cleaning");
+                    builder.color(isClean ? "#10b981" : "#ef4444");
+                }
             } else {
-                boolean isCrowded = (data.getValue1() != null && data.getValue1() > 200.0f);
+                boolean isCrowded = gasLevel > 200.0f;
                 builder.status(isCrowded ? "Crowded" : "Spacious");
                 builder.color(isCrowded ? "#f59e0b" : "#3b82f6");
             }
         } else {
             builder.status("No Data");
-            builder.color("#9ca3af"); 
+            builder.color("#9ca3af");
         }
-        
+
         return builder.build();
+    }
+
+    private Optional<SensorDataRaw> latestReading(Long zoneId, MetricCode metricCode) {
+        return sensorDataRawRepository
+                .findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(zoneId, metricCode);
     }
 
     @Transactional(readOnly = true)
@@ -86,8 +99,8 @@ public class PublicZoneService {
         return ZoneStatusResponse.builder()
                 .zoneId(zone.getId())
                 .name(zone.getName())
-                .status("NORMAL") 
-                .statusMessage("Available")
+                .status("NORMAL")
+                .statusMessage("이용하기 적절한 상태입니다.")
                 .build();
     }
 }
