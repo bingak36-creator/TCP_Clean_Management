@@ -36,9 +36,9 @@ Ticker ticker;
 // 전송 대상 모드: "SERVER" (기존 스프링부트) 또는 "SUPABASE" (클라우드 DB 직접 전송)
 String destMode = "SERVER";
 
-// [모드 1] 스프링부트 서버 설정 (설정 포털 192.168.4.1 에서 입력받아 영구 저장, 기본값: 프로젝트 ngrok 도메인)
-String serverIp = "spearmint-remover-proximity.ngrok-free.dev";
-String serverPort = "443";
+// [모드 1] 스프링부트 서버 설정 (설정 포털 192.168.4.1 에서 입력받아 영구 저장, 기본값: 구글 클라우드 VM 서버)
+String serverIp = "34.50.54.140";
+String serverPort = "8080";
 
 // [모드 2] 수파베이스 클라우드 DB 설정 (설정 포털 192.168.4.1 에서 입력받아 영구 저장)
 String supabaseUrl = "";
