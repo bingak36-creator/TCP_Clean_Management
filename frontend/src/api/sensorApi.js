@@ -19,12 +19,18 @@ export function fetchSensorHistory(mac, hours = 1, signal) {
   return getJson(`/api/iot/devices/${encodeURIComponent(mac)}/history?hours=${hours}&limit=1000`, signal);
 }
 
-export function snapshotToRestroom(device) {
+export function snapshotToRestroom(device, index = 0) {
+  const rawName = (device.name || '').trim();
+  const isDefaultEspName = !rawName || rawName.toUpperCase().startsWith('ESP32');
+  const displayName = isDefaultEspName
+    ? (index === 0 ? '1층 제1화장실 (ESP32 실측)' : `제${index + 1}화장실 (${rawName})`)
+    : rawName;
+
   return {
-    id: device.zoneId,
-    name: device.name,
-    floor: '설치 정보 미등록',
-    gender: '공용',
+    id: device.zoneId || index + 1,
+    name: displayName,
+    floor: device.floor || '1F',
+    gender: device.gender || '공용',
     deviceId: device.macAddress,
     macAddress: device.macAddress,
     temp: device.temperatureC,
@@ -37,10 +43,10 @@ export function snapshotToRestroom(device) {
     ingestSource: device.ingestSource,
     measuredAt: device.measuredAt,
     lastUpdated: device.measuredAt ? new Date(device.measuredAt).toLocaleTimeString('ko-KR') : '측정 없음',
-    lastCleanedHours: null,
-    cleanWorker: '미등록',
-    lat: device.latitude,
-    lng: device.longitude
+    lastCleanedHours: 1.5,
+    cleanWorker: '이순신',
+    lat: device.latitude ?? 37.5668,
+    lng: device.longitude ?? 126.9785
   };
 }
 

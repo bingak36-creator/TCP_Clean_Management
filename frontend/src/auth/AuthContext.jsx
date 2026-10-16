@@ -133,7 +133,8 @@ export function AuthProvider({ children }) {
           const devices = await fetch(`${API_BASE}/api/iot/devices`, {
             headers: { 'ngrok-skip-browser-warning': 'true' }
           }).then(response => response.ok ? response.json() : []).catch(() => []);
-          mockUser.zoneIds = devices.map(device => device.zoneId);
+          const liveZoneIds = devices.map(device => Number(device.zoneId)).filter(Boolean);
+          mockUser.zoneIds = Array.from(new Set([...(mockUser.zoneIds || []), ...liveZoneIds]));
           const fakeToken = 'mock-jwt-token-' + mockUser.role;
           setToken(fakeToken);
           setUser(mockUser);
@@ -145,6 +146,23 @@ export function AuthProvider({ children }) {
       }
       throw err;
     }
+  };
+
+  // 상단 헤더에서 로그아웃 없이 즉시 역할 전환 (개발자 / 현장 관리자 / 청소 담당자)
+  const switchRole = (nextRole) => {
+    const roleMap = {
+      [ROLES.DEVELOPER]: { id: 1, username: 'developer', role: ROLES.DEVELOPER, zoneIds: [1, 2, 3, 4], isDemo: true },
+      [ROLES.ADMIN]: { id: 2, username: 'admin', role: ROLES.ADMIN, zoneIds: [1, 2, 3, 4], isDemo: true },
+      [ROLES.CLEANER]: { id: 3, username: 'cleaner', role: ROLES.CLEANER, zoneIds: [1, 2, 3, 4], isDemo: true }
+    };
+    const nextUser = roleMap[nextRole];
+    if (!nextUser) return;
+    const fakeToken = 'mock-jwt-token-' + nextUser.role;
+    setToken(fakeToken);
+    setUser(nextUser);
+    localStorage.setItem('tcp_auth_token', fakeToken);
+    localStorage.setItem('tcp_auth_user', JSON.stringify(nextUser));
+    localStorage.setItem('isAdminLoggedIn', 'true');
   };
 
   const logout = () => {
@@ -167,9 +185,10 @@ export function AuthProvider({ children }) {
     if (!user) return false;
     // DEVELOPER는 전체 구역 접근 가능
     if (user.role === ROLES.DEVELOPER) return true;
-    // ADMIN 및 CLEANER는 본인 배정 zoneIds에 포함된 경우만 접근 가능
+    // ADMIN 및 CLEANER는 본인 배정 zoneIds에 포함된 경우만 접근 가능 (배정 목록이 비어있으면 기본 구역 허용)
     if (!zoneId) return false;
-    return user.zoneIds?.includes(Number(zoneId));
+    if (!user.zoneIds || user.zoneIds.length === 0) return true;
+    return user.zoneIds.includes(Number(zoneId));
   };
 
   // 탭별 접근 권한
@@ -209,6 +228,7 @@ export function AuthProvider({ children }) {
         isAuthenticated: Boolean(user && token),
         login,
         logout,
+        switchRole,
         hasRole,
         canAccessZone,
         canViewTab,

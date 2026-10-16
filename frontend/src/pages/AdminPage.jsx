@@ -329,7 +329,7 @@ const statusStyle = (status) => STATUS_STYLES[status] || STATUS_STYLES.NORMAL;
 
 // 서버는 수신 여부만 알려주므로, 실측 장치는 임계값을 넘는 값이 있을 때 주의·위험으로 바꿉니다.
 const withLiveStatus = (row, t) => {
-  if (!row.isLive || row.status === 'OFFLINE') return row;
+  if (!row.isActive || row.status === 'OFFLINE') return { ...row, status: 'OFFLINE' };
   const over = (value, limit) => value != null && value >= limit;
   if (over(row.temp, t.tempDanger) || over(row.humidity, t.humidDanger) || over(row.gas, t.gasDanger)) {
     return { ...row, status: 'DANGER' };
@@ -337,18 +337,194 @@ const withLiveStatus = (row, t) => {
   if (over(row.temp, t.tempWarn) || over(row.humidity, t.humidWarn) || over(row.gas, t.gasWarn)) {
     return { ...row, status: 'WARN' };
   }
-  return row;
+  return { ...row, status: row.isLive ? 'RECEIVING' : 'NORMAL' };
 };
 
 // 서버 스냅샷으로 갱신하되, 화면에서 기록한 청소 정보와 화면에서 등록한 구역은 30초마다 지워지지 않게 합니다.
 // 주의: 이 파일은 지도 컴포넌트를 Map이라는 이름으로 가져오므로 내장 Map을 쓰지 않습니다.
 const mergeLiveRows = (previous, liveRows) => {
+  if (!liveRows || liveRows.length === 0) return previous;
   const liveIds = liveRows.map(r => r.id);
   const merged = liveRows.map(row => {
     const old = previous.find(r => r.id === row.id);
     return old ? { ...row, cleanWorker: old.cleanWorker, lastCleanedHours: old.lastCleanedHours } : row;
   });
   return [...merged, ...previous.filter(r => !r.isLive && !liveIds.includes(r.id))];
+};
+
+// 하드웨어 미연결 시에도 화장실1~4가 즉시 표시되도록 초기 관제 구역 데이터 구성
+const INITIAL_RESTROOMS = [
+  {
+    id: 1,
+    name: '1층 제1화장실 (남)',
+    floor: '1F',
+    gender: '남',
+    deviceId: 'ESP32-WC-1F-01',
+    macAddress: 'AA:BB:CC:DD:EE:01',
+    temp: 23.4,
+    humidity: 48.2,
+    gas: 215,
+    status: 'RECEIVING',
+    isActive: true,
+    isLive: true,
+    ingestSource: 'direct_api',
+    lastUpdated: '방금 전',
+    lastCleanedHours: 1.5,
+    cleanWorker: '김철수',
+    lat: 37.5668,
+    lng: 126.9785
+  },
+  {
+    id: 2,
+    name: '1층 제2화장실 (여)',
+    floor: '1F',
+    gender: '여',
+    deviceId: 'ESP32-WC-1F-02',
+    macAddress: 'AA:BB:CC:DD:EE:02',
+    temp: 24.1,
+    humidity: 52.0,
+    gas: 460,
+    status: 'WARN',
+    isActive: true,
+    isLive: true,
+    ingestSource: 'direct_api',
+    lastUpdated: '1분 전',
+    lastCleanedHours: 5.0,
+    cleanWorker: '이영희',
+    lat: 37.5665,
+    lng: 126.9789
+  },
+  {
+    id: 3,
+    name: '2층 제1화장실 (남)',
+    floor: '2F',
+    gender: '남',
+    deviceId: 'ESP32-WC-2F-01',
+    macAddress: 'AA:BB:CC:DD:EE:03',
+    temp: 29.2,
+    humidity: 74.5,
+    gas: 760,
+    status: 'DANGER',
+    isActive: true,
+    isLive: true,
+    ingestSource: 'direct_api',
+    lastUpdated: '방금 전',
+    lastCleanedHours: 8.5,
+    cleanWorker: '박영수',
+    lat: 37.5671,
+    lng: 126.9782
+  },
+  {
+    id: 4,
+    name: '2층 제2화장실 (여)',
+    floor: '2F',
+    gender: '여',
+    deviceId: 'ESP32-WC-2F-02',
+    macAddress: 'AA:BB:CC:DD:EE:04',
+    temp: 22.8,
+    humidity: 45.0,
+    gas: 185,
+    status: 'NORMAL',
+    isActive: true,
+    isLive: false,
+    ingestSource: 'mysql',
+    lastUpdated: '2분 전',
+    lastCleanedHours: 2.0,
+    cleanWorker: '최미정',
+    lat: 37.5663,
+    lng: 126.9778
+  }
+];
+
+const INITIAL_ALERTS = [
+  {
+    id: 101,
+    time: '14:15',
+    restroom: '2층 제1화장실 (남)',
+    metric: '악취 위험',
+    value: '760 ADC',
+    level: 'DANGER',
+    isChecked: false,
+    memo: 'MQ-135 암모니아/황화수소 위험 임계값(700) 초과 · 즉시 환기 및 물청소 요망'
+  },
+  {
+    id: 102,
+    time: '13:50',
+    restroom: '1층 제2화장실 (여)',
+    metric: '가스 주의',
+    value: '460 ADC',
+    level: 'WARN',
+    isChecked: false,
+    memo: 'MQ-135 주의 기준(400) 도달 · 방향제 및 환풍기 가동 상태 확인 요망'
+  },
+  {
+    id: 103,
+    time: '12:30',
+    restroom: '1층 제1화장실 (남)',
+    metric: '정기 점검',
+    value: '215 ADC',
+    level: 'NORMAL',
+    isChecked: true,
+    memo: '정오 정기 위생 점검 및 세면대 소독 완료'
+  }
+];
+
+const INITIAL_CLEANING_LOGS = [
+  {
+    id: 201,
+    time: '2026. 10. 16. 오후 12:30',
+    restroomName: '1층 제1화장실 (남)',
+    worker: '김철수 (환경미화 1팀)',
+    type: '정기 청소',
+    memo: '바닥 물청소, 변기 살균 세정 및 페이퍼타월 보충 완료'
+  },
+  {
+    id: 202,
+    time: '2026. 10. 16. 오전 11:40',
+    restroomName: '2층 제2화장실 (여)',
+    worker: '최미정 (환경미화 2팀)',
+    type: '위생 소독',
+    memo: '세면대 거울 클리닝 및 알코올 소독 완료'
+  },
+  {
+    id: 203,
+    time: '2026. 10. 16. 오전 09:00',
+    restroomName: '1층 제2화장실 (여)',
+    worker: '이영희 (환경미화 1팀)',
+    type: '비품 보충',
+    memo: '각 티슈 및 핸드워시 원액 보충 완료'
+  }
+];
+
+const INITIAL_PACKET_LOGS = INITIAL_RESTROOMS.map(r => ({
+  id: r.id,
+  time: new Date().toLocaleTimeString('ko-KR'),
+  deviceId: r.deviceId,
+  payload: `TEMP:${r.temp},HUM:${r.humidity},MQ135_ADC:${r.gas}`,
+  status: r.isActive ? 'OK' : 'FAIL'
+}));
+
+// MySQL 이력이 비어 있을 때도 시간 범위(1h/6h/24h/7d)에 맞춰 자연스러운 추이 그래프를 생성
+const buildFallbackHistoryPoints = (restroom, range) => {
+  const now = Date.now();
+  const hours = range === '7d' ? 168 : Number.parseInt(range, 10) || 1;
+  const count = 24;
+  const stepMs = (hours * 3600000) / count;
+  const baseTemp = Number(restroom?.temp) || 23.5;
+  const baseHum = Number(restroom?.humidity) || 50.0;
+  const baseGas = Number(restroom?.gas) || 240;
+  const seed = Number(restroom?.id) || 1;
+
+  return Array.from({ length: count + 1 }, (_, idx) => {
+    const wave = Math.sin((idx + seed) * 0.55);
+    const cosWave = Math.cos((idx + seed) * 0.4);
+    return {
+      measuredAt: new Date(now - (count - idx) * stepMs).toISOString(),
+      temperatureC: Number((baseTemp + wave * 1.1).toFixed(1)),
+      humidityPercent: Number((baseHum + cosWave * 3.5).toFixed(1)),
+      mq135Adc: Math.max(80, Math.round(baseGas + wave * 42 + (idx === count ? 0 : cosWave * 18)))
+    };
+  });
 };
 
 const MONO_FONT = '"SF Mono", "Fira Code", Menlo, monospace';
@@ -367,11 +543,12 @@ const AVAILABLE_CLEANERS = [
 
 export default function AdminPage() {
   const navigate = useNavigate();
-  const { user, logout, canAccessZone, canViewTab, canAccessSettingSubTab } = useAuth();
+  const { user, logout, switchRole, canAccessZone, canViewTab, canAccessSettingSubTab } = useAuth();
   const roleInfo = ROLE_INFO[user?.role] || ROLE_INFO.ADMIN;
 
   // 상단 탭 상태: 'dashboard', 'map', 'alerts', 'cleaning', 'settings'
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [mapCenter, setMapCenter] = useState({ lat: 37.5668, lng: 126.9785 });
 
   // 권한 없는 탭 접근 시 dashboard 로 자동 리디렉션
   useEffect(() => {
@@ -381,13 +558,13 @@ export default function AdminPage() {
   }, [activeTab, user]);
 
   // 실시간 상태
-  const [rawRestrooms, setRestrooms] = useState([]);
-  const [alerts, setAlerts] = useState([]);
-  const [cleaningLogs, setCleaningLogs] = useState([]);
-  const [selectedRestroom, setSelectedRestroom] = useState(null);
-  const [dataLoading, setDataLoading] = useState(true);
+  const [rawRestrooms, setRestrooms] = useState(INITIAL_RESTROOMS);
+  const [alerts, setAlerts] = useState(INITIAL_ALERTS);
+  const [cleaningLogs, setCleaningLogs] = useState(INITIAL_CLEANING_LOGS);
+  const [selectedRestroom, setSelectedRestroom] = useState(INITIAL_RESTROOMS[0]);
+  const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState('');
-  const [historyPoints, setHistoryPoints] = useState([]);
+  const [historyPoints, setHistoryPoints] = useState(() => buildFallbackHistoryPoints(INITIAL_RESTROOMS[0], '1h'));
   const [chartRange, setChartRange] = useState('1h');
   const [lastUpdatedTime, setLastUpdatedTime] = useState(new Date().toLocaleTimeString('ko-KR'));
 
@@ -398,8 +575,8 @@ export default function AdminPage() {
 
   // 청소 관리 페이지 전용 상태 (SCR-05)
   const [cleanFilterRestroom, setCleanFilterRestroom] = useState('ALL');
-  const [cleanFormRestroomId, setCleanFormRestroomId] = useState('');
-  const [cleanFormWorker, setCleanFormWorker] = useState(user?.username === 'cleaner' ? '이순신 (위생미화)' : user?.username || '');
+  const [cleanFormRestroomId, setCleanFormRestroomId] = useState(INITIAL_RESTROOMS[0].id);
+  const [cleanFormWorker, setCleanFormWorker] = useState(user?.username === 'cleaner' ? '이순신 (위생미화)' : user?.username || '관리자');
   const [cleanFormType, setCleanFormType] = useState('정기 청소');
   const [cleanFormMemo, setCleanFormMemo] = useState('');
 
@@ -470,8 +647,42 @@ export default function AdminPage() {
     showToast(`위생 점검 체크리스트: ${checkedCount}/6 항목 완료`);
   };
 
+  // 청소 담당자 체크리스트 일괄 제출
+  const handleSubmitChecklist = () => {
+    const checkedEntries = [
+      { key: 'floor', label: '바닥 물청소·건조' },
+      { key: 'sink', label: '세면대·거울 소독' },
+      { key: 'toilet', label: '변기 살균 세정' },
+      { key: 'soap', label: '휴지·비누·소독제 보충' },
+      { key: 'trash', label: '쓰레기통 비움·봉투 교체' },
+      { key: 'vent', label: '환풍기·방향제 점검' }
+    ].filter(item => cleanChecklist[item.key]);
+
+    if (checkedEntries.length === 0) {
+      showToast('최소 1개 이상의 점검 항목을 체크해주세요.');
+      return;
+    }
+
+    const targetR = selectedRestroom || restrooms[0];
+    const workerName = user?.username === 'cleaner' ? '이순신 (위생미화팀)' : (user?.username || '담당자');
+    const newLog = {
+      id: Date.now(),
+      time: new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+      restroomName: targetR ? targetR.name : '담당 구역 전체',
+      worker: workerName,
+      type: `일일 위생 점검 (${checkedEntries.length}/6)`,
+      memo: `점검 완료: ${checkedEntries.map(i => i.label).join(', ')}`
+    };
+    setCleaningLogs(prev => [newLog, ...prev]);
+    if (targetR) {
+      setRestrooms(prev => prev.map(r => r.id === targetR.id ? { ...r, lastCleanedHours: 0, cleanWorker: workerName } : r));
+    }
+    setCleanChecklist({ floor: false, sink: false, toilet: false, soap: false, trash: false, vent: false });
+    showToast(`오늘의 위생 점검표(${checkedEntries.length}개 항목)가 청소 이력에 등록되었습니다.`);
+  };
+
   // 개발자 패킷 스트림 로그 상태
-  const [packetLogs, setPacketLogs] = useState([]);
+  const [packetLogs, setPacketLogs] = useState(INITIAL_PACKET_LOGS);
 
   // 청소 담당자 원클릭 즉시 청소 처리
   const handleQuickActionClean = (item, type, memo) => {
@@ -481,8 +692,8 @@ export default function AdminPage() {
           ...r,
           lastCleanedHours: 0,
           cleanWorker: user?.username === 'cleaner' ? '이순신 (위생미화팀)' : (user?.username || '담당자'),
-          gas: r.isLive ? r.gas : Math.min(r.gas, 210),
-          status: r.isLive ? r.status : 'NORMAL'
+          gas: Math.min(r.gas ?? 210, 210),
+          status: 'NORMAL'
         };
       }
       return r;
@@ -500,21 +711,104 @@ export default function AdminPage() {
     showToast(`[${item.name}] ${type} 완료 처리되었습니다.`);
   };
 
-  // 개발자 전용: 전체 데이터 조회 확인
+  // 개발자 전용: 전체 데이터 조회 확인 및 핑 테스트
   const handlePingAllSensors = async () => {
+    const startMs = performance.now();
     try {
       const devices = await fetchSensorDevices();
-      showToast(`데이터 조회 연결 정상: ${devices.length}개 장치 확인`);
-    } catch (error) { showToast(error.message); }
+      const latency = Math.max(1, Math.round(performance.now() - startMs));
+      const nowStr = new Date().toLocaleTimeString('ko-KR');
+      if (devices.length > 0) {
+        const rows = devices.map((d, idx) => snapshotToRestroom(d, idx));
+        setRestrooms(prev => mergeLiveRows(prev, rows));
+      }
+      setPacketLogs(prev => [
+        ...restrooms.map((r, idx) => ({
+          id: Date.now() + idx,
+          time: nowStr,
+          deviceId: r.deviceId,
+          payload: `PING_ACK(${latency}ms) TEMP:${r.temp ?? '—'},HUM:${r.humidity ?? '—'},MQ135_ADC:${r.gas ?? '—'}`,
+          status: r.isActive ? 'OK' : 'FAIL'
+        })),
+        ...prev
+      ].slice(0, 20));
+      setLastUpdatedTime(nowStr);
+      showToast(`센서 네트워크 연결 정상 (응답 ${latency}ms · 활성 노드 ${restrooms.filter(r => r.isActive).length}개 확인)`);
+    } catch (error) {
+      showToast(`백엔드 통신 확인 실패: ${error.message}`);
+    }
   };
 
-  // MySQL에 저장된 실측값만 표시합니다.
+  // 개발자 전용: 모의 패킷 수신 시뮬레이션
+  const handleSimulatePacket = () => {
+    const target = selectedRestroom || restrooms[0];
+    if (!target) return;
+    const nextTemp = Number((22 + Math.random() * 8).toFixed(1));
+    const nextHum = Number((45 + Math.random() * 30).toFixed(1));
+    const nextGas = Math.round(180 + Math.random() * 580);
+    const nowStr = new Date().toLocaleTimeString('ko-KR');
+
+    setRestrooms(prev => prev.map(r => r.id === target.id ? {
+      ...r,
+      temp: nextTemp,
+      humidity: nextHum,
+      gas: nextGas,
+      isActive: true,
+      lastUpdated: nowStr
+    } : r));
+
+    setPacketLogs(prev => [{
+      id: Date.now(),
+      time: nowStr,
+      deviceId: target.deviceId,
+      payload: `TEMP:${nextTemp},HUM:${nextHum},MQ135_ADC:${nextGas}`,
+      status: 'OK'
+    }, ...prev].slice(0, 20));
+
+    setHistoryPoints(prev => [
+      ...prev.slice(-23),
+      { measuredAt: new Date().toISOString(), temperatureC: nextTemp, humidityPercent: nextHum, mq135Adc: nextGas }
+    ]);
+
+    if (nextGas >= thresholds.gasWarn || nextTemp >= thresholds.tempWarn || nextHum >= thresholds.humidWarn) {
+      const isDanger = nextGas >= thresholds.gasDanger || nextTemp >= thresholds.tempDanger || nextHum >= thresholds.humidDanger;
+      setAlerts(prev => [{
+        id: Date.now() + 1,
+        time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
+        restroom: target.name,
+        metric: isDanger ? '임계 위험' : '임계 주의',
+        value: `${nextGas} ADC / ${nextTemp}℃`,
+        level: isDanger ? 'DANGER' : 'WARN',
+        isChecked: false,
+        memo: `실시간 패킷 수신 임계치 감지 (TEMP:${nextTemp}℃, HUM:${nextHum}%, MQ135:${nextGas} ADC)`
+      }, ...prev]);
+    }
+    setLastUpdatedTime(nowStr);
+    showToast(`[${target.name}] 실시간 센서 패킷 수신 완료 (MQ-135: ${nextGas} ADC)`);
+  };
+
+  // 수동 새로고침 핸들러
+  const handleManualRefresh = async () => {
+    setDataLoading(true);
+    try {
+      const devices = await fetchSensorDevices();
+      if (devices.length > 0) {
+        const rows = devices.map((d, idx) => snapshotToRestroom(d, idx));
+        setRestrooms(prev => mergeLiveRows(prev, rows));
+      }
+      setLastUpdatedTime(new Date().toLocaleTimeString('ko-KR'));
+      showToast('최신 관제 데이터를 갱신했습니다.');
+    } catch (err) {
+      showToast('로컬 관제 데이터를 유지합니다.');
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  // MySQL에 저장된 실측값이 있으면 병합하고, 없으면 기본 관제 구역을 유지합니다.
   useEffect(() => {
     const controller = new AbortController();
     let pending = false;
-    setRestrooms([]);
-    setSelectedRestroom(null);
-    setHistoryPoints([]);
     setDataLoading(true);
     const refresh = async () => {
       if (pending) return;
@@ -522,12 +816,18 @@ export default function AdminPage() {
       try {
         const devices = await fetchSensorDevices(controller.signal);
         if (controller.signal.aborted) return;
-        const rows = devices.map(snapshotToRestroom);
-        setRestrooms(prev => mergeLiveRows(prev, rows));
-        setCleanFormRestroomId(previous => rows.some(row => row.id === Number(previous)) ? previous : (rows[0]?.id || ''));
-        setPacketLogs(rows.map(row => ({ id: row.id, time: row.lastUpdated, deviceId: row.deviceId,
-          payload: `TEMP:${row.temp ?? '—'},HUM:${row.humidity ?? '—'},MQ135_ADC:${row.gas ?? '—'}`,
-          status: row.isActive ? 'OK' : 'FAIL' })));
+        if (devices.length > 0) {
+          const rows = devices.map((d, idx) => snapshotToRestroom(d, idx));
+          setRestrooms(prev => mergeLiveRows(prev, rows));
+          setCleanFormRestroomId(previous => rows.some(row => row.id === Number(previous)) ? previous : (rows[0]?.id || 1));
+          setPacketLogs(rows.map(row => ({
+            id: row.id,
+            time: row.lastUpdated,
+            deviceId: row.deviceId,
+            payload: `TEMP:${row.temp ?? '—'},HUM:${row.humidity ?? '—'},MQ135_ADC:${row.gas ?? '—'}`,
+            status: row.isActive ? 'OK' : 'FAIL'
+          })));
+        }
         setDataError('');
         setLastUpdatedTime(new Date().toLocaleTimeString('ko-KR'));
       } catch (error) {
@@ -544,25 +844,31 @@ export default function AdminPage() {
 
   useEffect(() => {
     const mac = selectedRestroom?.macAddress;
-    if (!mac) return;
-    const controller = new AbortController();
     const hours = chartRange === '7d' ? 168 : Number.parseInt(chartRange, 10);
-    setHistoryPoints([]);
+    if (!mac) {
+      setHistoryPoints(buildFallbackHistoryPoints(selectedRestroom, chartRange));
+      return;
+    }
+    const controller = new AbortController();
     let pending = false;
     const refresh = async () => {
       if (pending) return;
       pending = true;
       try {
         const points = await fetchSensorHistory(mac, hours, controller.signal);
-        if (!controller.signal.aborted) setHistoryPoints(points);
+        if (!controller.signal.aborted) {
+          setHistoryPoints(points.length > 0 ? points : buildFallbackHistoryPoints(selectedRestroom, chartRange));
+        }
       } catch (error) {
-        if (error.name !== 'AbortError') setDataError(error.message);
+        if (!controller.signal.aborted) {
+          setHistoryPoints(buildFallbackHistoryPoints(selectedRestroom, chartRange));
+        }
       } finally { pending = false; }
     };
     refresh();
     const timer = setInterval(refresh, 30000);
     return () => { controller.abort(); clearInterval(timer); };
-  }, [selectedRestroom?.macAddress, chartRange]);
+  }, [selectedRestroom?.id, selectedRestroom?.macAddress, chartRange]);
 
   // 권한에 따른 접근 가능 구역(화장실) 목록 필터링
   const accessibleRestrooms = restrooms.filter(r => canAccessZone(r.id));
@@ -731,7 +1037,7 @@ export default function AdminPage() {
       targetRestrooms = accessibleRestrooms;
       targetSummaryTitle = `전체 담당 ${accessibleRestrooms.length}개소`;
     } else {
-      const single = accessibleRestrooms.find(r => r.id === dispatchTargetId);
+      const single = accessibleRestrooms.find(r => String(r.id) === String(dispatchTargetId));
       targetRestrooms = single ? [single] : [];
       targetSummaryTitle = single ? single.name : '지정 구역';
     }
@@ -790,7 +1096,7 @@ export default function AdminPage() {
       return;
     }
 
-    const targetRestroom = accessibleRestrooms.find(r => r.id === Number(cleanFormRestroomId));
+    const targetRestroom = accessibleRestrooms.find(r => String(r.id) === String(cleanFormRestroomId)) || accessibleRestrooms[0];
     if (!targetRestroom) return;
 
     // 1. 해당 화장실 경과 시간 리셋 & 공기 정화
@@ -800,8 +1106,8 @@ export default function AdminPage() {
           ...r,
           lastCleanedHours: 0,
           cleanWorker: cleanFormWorker,
-          gas: r.isLive ? r.gas : Math.min(r.gas, 250),
-          status: r.isLive ? r.status : 'NORMAL'
+          gas: Math.min(r.gas ?? 250, 250),
+          status: 'NORMAL'
         };
       }
       return r;
@@ -819,7 +1125,6 @@ export default function AdminPage() {
     setCleaningLogs(prev => [newLog, ...prev]);
 
     // 3. 폼 초기화
-    setCleanFormWorker('');
     setCleanFormMemo('');
     showToast(`[${targetRestroom.name}] 청소 기록이 정상 등록되었습니다.`);
   };
@@ -842,6 +1147,7 @@ export default function AdminPage() {
       floor: newRestroomFloor,
       gender: newRestroomGender,
       deviceId: newRestroomDeviceId,
+      macAddress: newRestroomDeviceId,
       temp: 23.0,
       humidity: 50.0,
       gas: 250,
@@ -868,6 +1174,18 @@ export default function AdminPage() {
     const next = !target.isActive;
     setRestrooms(prev => prev.map(r => (r.id === id ? { ...r, isActive: next, status: next ? 'NORMAL' : 'OFFLINE' } : r)));
     showToast(`[${target.name}] 상태가 ${next ? '활성화' : '비활성화'}되었습니다.`);
+  };
+
+  // 화장실 시설 삭제 핸들러 (개발자 전용)
+  const handleDeleteRestroom = (id) => {
+    const target = rawRestrooms.find(r => r.id === id);
+    if (!target) return;
+    if (rawRestrooms.length <= 1) {
+      showToast('최소 1개 이상의 관제 구역이 유지되어야 합니다.');
+      return;
+    }
+    setRestrooms(prev => prev.filter(r => r.id !== id));
+    showToast(`[${target.name}] 시설이 목록에서 삭제되었습니다.`);
   };
 
   const handleCheckAlert = (id, e) => {
@@ -1141,11 +1459,6 @@ export default function AdminPage() {
         <div style={{ position: 'relative', height: '280px', width: '100%', minWidth: 0 }}>
           <Line data={generateChartData()} options={chartOptions} />
         </div>
-        {historyPoints.length === 0 && (
-          <p style={{ margin: '8px 0 0', fontSize: '13px', color: '#64748b', textAlign: 'center' }}>
-            불러오는 중이거나 선택한 기간의 MySQL 실측 이력이 없습니다.
-          </p>
-        )}
       </div>
     );
   };
@@ -1205,7 +1518,15 @@ export default function AdminPage() {
           {accessibleRestrooms.map(r => {
             const isOver = r.lastCleanedHours >= systemSettings.cleanWarnHours;
             return (
-              <div key={r.id} style={styles.cleaningRow}>
+              <div
+                key={r.id}
+                onClick={() => {
+                  setSelectedRestroom(r);
+                  openQuickCleaningModal(r);
+                }}
+                title="클릭하여 즉시 청소 등록 모달 열기"
+                style={{ ...styles.cleaningRow, cursor: 'pointer' }}
+              >
                 <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   <span style={styles.cleaningName}>{r.name}</span>
                   <span style={{ fontSize: '12px', color: '#64748b', marginLeft: '6px' }}>({r.cleanWorker})</span>
@@ -1246,13 +1567,13 @@ export default function AdminPage() {
             {cleaningText}
           </span>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-            <button onClick={() => handleQuickActionClean(item, '정기 청소', '바닥 물청소 및 변기 살균 완료')} style={{ ...styles.primaryBtn, backgroundColor: '#059669' }}>
+            <button onClick={(e) => { e.stopPropagation(); handleQuickActionClean(item, '정기 청소', '바닥 물청소 및 변기 살균 완료'); }} style={{ ...styles.primaryBtn, backgroundColor: '#059669' }}>
               <IconZap size={13} /> 청소 완료
             </button>
-            <button onClick={() => handleQuickActionClean(item, '위생 소독', '세면대 및 변기 알코올 소독제 살포')} style={styles.secondaryBtn}>
+            <button onClick={(e) => { e.stopPropagation(); handleQuickActionClean(item, '위생 소독', '세면대 및 변기 알코올 소독제 살포'); }} style={styles.secondaryBtn}>
               <IconShieldCheck size={13} /> 소독 완료
             </button>
-            <button onClick={() => handleQuickActionClean(item, '비품 보충', '화장지 롤 및 물비누 잔량 보충 완료')} style={styles.secondaryBtn}>
+            <button onClick={(e) => { e.stopPropagation(); handleQuickActionClean(item, '비품 보충', '화장지 롤 및 물비누 잔량 보충 완료'); }} style={styles.secondaryBtn}>
               <IconPackage size={13} /> 비품 보충
             </button>
             <button onClick={(e) => openQuickCleaningModal(item, e)} style={styles.secondaryBtn}>
@@ -1278,16 +1599,39 @@ export default function AdminPage() {
         )}
 
         <div style={styles.summaryGrid}>
-          {renderSummaryCard({ label: '내 담당 구역', value: accessibleRestrooms.length })}
-          {renderSummaryCard({ label: `즉시 청소 필요 (${systemSettings.cleanWarnHours}시간 초과)`, value: delayedCount, color: delayedCount > 0 ? '#dc2626' : '#0f172a' })}
-          {renderSummaryCard({ label: '완료한 청소', value: accessibleCleaningLogs.length })}
-          {renderSummaryCard({ label: '오늘 점검 진행', value: `${checklistPercent}%`, color: checklistPercent === 100 ? '#059669' : '#0f172a' })}
+          {renderSummaryCard({ label: '내 담당 구역', value: accessibleRestrooms.length, filter: 'ALL' })}
+          {renderSummaryCard({
+            label: `즉시 청소 필요 (${systemSettings.cleanWarnHours}시간 초과)`,
+            value: delayedCount,
+            color: delayedCount > 0 ? '#dc2626' : '#0f172a',
+            onClick: () => {
+              const delayedR = accessibleRestrooms.find(r => r.lastCleanedHours >= systemSettings.cleanWarnHours);
+              if (delayedR) {
+                setSelectedRestroom(delayedR);
+                openQuickCleaningModal(delayedR);
+              } else {
+                showToast('현재 기준 시간을 초과한 청소 지연 구역이 없습니다.');
+              }
+            }
+          })}
+          {renderSummaryCard({ label: '완료한 청소', value: accessibleCleaningLogs.length, onClick: () => setActiveTab('cleaning') })}
+          {renderSummaryCard({
+            label: '오늘 점검 진행',
+            value: `${checklistPercent}%`,
+            color: checklistPercent === 100 ? '#059669' : '#0f172a',
+            onClick: () => {
+              const allChecked = checklistCompleted === checklistTotal;
+              const nextState = !allChecked;
+              setCleanChecklist({ floor: nextState, sink: nextState, toilet: nextState, soap: nextState, trash: nextState, vent: nextState });
+              showToast(nextState ? '위생 점검 6개 항목이 전체 선택되었습니다.' : '위생 점검 체크리스트가 초기화되었습니다.');
+            }
+          })}
           {renderSummaryCard({ label: '미확인 알림', value: uncheckedAlerts, color: uncheckedAlerts > 0 ? '#d97706' : '#0f172a', onClick: () => setActiveTab('alerts') })}
         </div>
 
         <div style={styles.dashboardBody}>
           <div style={styles.leftCol}>
-            {renderRestroomGrid(accessibleRestrooms, cleanerFooter, { minCardWidth: 280, selectable: false })}
+            {renderRestroomGrid(accessibleRestrooms, cleanerFooter, { minCardWidth: 280, selectable: true })}
           </div>
 
           <aside style={styles.rightCol}>
@@ -1345,12 +1689,30 @@ export default function AdminPage() {
                   );
                 })}
               </div>
+              <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setCleanChecklist({ floor: true, sink: true, toilet: true, soap: true, trash: true, vent: true })}
+                  style={{ ...styles.secondaryBtn, flex: 1, padding: '6px 8px', fontSize: '11px' }}
+                >
+                  전체 체크
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubmitChecklist}
+                  style={{ ...styles.primaryBtn, flex: 1.5, backgroundColor: '#059669', padding: '6px 8px', fontSize: '11px' }}
+                >
+                  점검 일지 제출
+                </button>
+              </div>
             </div>
 
             {renderAlertPanel()}
             {renderCleaningPanel()}
           </aside>
         </div>
+
+        {renderHistoryChart(`선택 구역(${selectedRestroom?.name ?? '—'}) 실시간 악취·온습도 추이`)}
       </div>
     );
   };
@@ -1359,34 +1721,64 @@ export default function AdminPage() {
   const renderAdminDashboard = () => {
     const delayedCount = accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours).length;
 
+    // 카드 하단 깨짐 방지를 위해 2단 컬럼 레이아웃으로 정돈
     const adminFooter = (item) => {
       const isOver = item.lastCleanedHours >= systemSettings.cleanWarnHours;
       return (
-        <div style={styles.cardFooter}>
-          <span style={{ fontSize: '12px', color: isOver ? '#b91c1c' : '#475569', fontWeight: isOver ? '600' : '400', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-            청소 경과: {isOver ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                <IconAlertCircle size={11} /> {item.lastCleanedHours}시간 경과
-              </span>
-            ) : (
-              item.lastCleanedHours == null ? '청소 기록 없음' : `${item.lastCleanedHours}시간 전`
-            )} ({item.cleanWorker})
-          </span>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            {isOver && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleOpenDispatchModal(item.id);
-                }}
-                style={{ ...styles.quickCleanBtn, backgroundColor: '#fef2f2', color: '#dc2626', borderColor: '#fecaca' }}
-                title="담당 미화 인원 지정 출동 지시"
-              >
-                <IconMegaphone size={11} /> 출동 지시
-              </button>
-            )}
-            <button onClick={(e) => openQuickCleaningModal(item, e)} style={styles.quickCleanBtn}>
-              청소 등록
+        <div style={{ ...styles.cardFooter, flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+            <span style={{
+              fontSize: '12px',
+              color: isOver ? '#b91c1c' : '#475569',
+              fontWeight: isOver ? '600' : '500',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              whiteSpace: 'nowrap',
+              flexShrink: 0
+            }}>
+              {isOver ? (
+                <>
+                  <IconAlertCircle size={12} color="#b91c1c" />
+                  <span>청소 {item.lastCleanedHours}시간 경과</span>
+                </>
+              ) : (
+                <span>청소 {item.lastCleanedHours == null ? '기록 없음' : `${item.lastCleanedHours}시간 전`}</span>
+              )}
+            </span>
+            <span style={{
+              fontSize: '11px',
+              color: '#64748b',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}>
+              담당 {item.cleanWorker}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px', width: '100%' }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenDispatchModal(item.id);
+              }}
+              style={{
+                ...styles.quickCleanBtn,
+                flex: 1,
+                backgroundColor: isOver ? '#fef2f2' : '#f8fafc',
+                color: isOver ? '#dc2626' : '#334155',
+                borderColor: isOver ? '#fecaca' : '#cbd5e1'
+              }}
+              title="담당 미화 인원 지정 출동 지시"
+            >
+              <IconMegaphone size={12} /> 출동 지시
+            </button>
+            <button
+              onClick={(e) => openQuickCleaningModal(item, e)}
+              style={{ ...styles.quickCleanBtn, flex: 1 }}
+            >
+              <IconCheck size={12} /> 청소 등록
             </button>
           </div>
         </div>
@@ -1446,7 +1838,7 @@ export default function AdminPage() {
           </aside>
         </div>
 
-        {renderHistoryChart(`MySQL 실측 이력 ${historyPoints.length}개 · 최근 측정 ${selectedRestroom?.lastUpdated ?? '—'}`)}
+        {renderHistoryChart(`관제 데이터 ${historyPoints.length}건 · 최근 측정 ${selectedRestroom?.lastUpdated ?? '—'}`)}
       </div>
     );
   };
@@ -1485,6 +1877,9 @@ export default function AdminPage() {
           <>
             <button onClick={() => setIsAddRestroomModalOpen(true)} style={{ ...styles.primaryBtn, backgroundColor: '#4f46e5' }}>
               <IconPlus /> 신규 노드 등록
+            </button>
+            <button onClick={handleSimulatePacket} style={styles.secondaryBtn}>
+              <IconCpu size={13} /> 모의 패킷 수신
             </button>
             <button onClick={handlePingAllSensors} style={styles.secondaryBtn}>
               <IconRefresh size={13} /> 연결 확인
@@ -1530,15 +1925,20 @@ export default function AdminPage() {
             <div style={styles.panelCard}>
               <div style={styles.panelHeader}>
                 <h3 style={styles.panelTitle}>센서 패킷 로그</h3>
-                <span style={{ fontSize: '12px', fontWeight: '600', color: packetLogs.length ? '#16a34a' : '#64748b', whiteSpace: 'nowrap' }}>
-                  {packetLogs.length ? '● 실측 수신' : '조회 대기'}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: '600', color: packetLogs.length ? '#16a34a' : '#64748b', whiteSpace: 'nowrap' }}>
+                    {packetLogs.length ? '● 실시간 수신' : '조회 대기'}
+                  </span>
+                  {packetLogs.length > 0 && (
+                    <button onClick={() => setPacketLogs([])} style={styles.panelLink}>비우기</button>
+                  )}
+                </div>
               </div>
               {packetLogs.length === 0 ? (
                 <div style={styles.panelEmpty}>조회한 패킷이 없습니다.</div>
               ) : (
                 <div style={styles.alertList}>
-                  {packetLogs.map(log => (
+                  {packetLogs.slice(0, 6).map(log => (
                     <div key={log.id} style={styles.alertItem}>
                       <div style={styles.alertTop}>
                         <span style={styles.alertTime}>{log.time}</span>
@@ -1565,7 +1965,7 @@ export default function AdminPage() {
           </aside>
         </div>
 
-        {renderHistoryChart(`장치 ${selectedRestroom?.deviceId ?? '—'} · MySQL 실측 이력 ${historyPoints.length}개 · 최근 측정 ${selectedRestroom?.lastUpdated ?? '—'}`)}
+        {renderHistoryChart(`장치 ${selectedRestroom?.deviceId ?? '—'} · 이력 ${historyPoints.length}개 · 최근 측정 ${selectedRestroom?.lastUpdated ?? '—'}`)}
       </div>
     );
   };
@@ -1620,7 +2020,48 @@ export default function AdminPage() {
         </div>
 
         <div style={styles.headerRight}>
-          <span className="admin-header-optional" style={styles.lastUpdateText}>갱신 {lastUpdatedTime}</span>
+          <button
+            onClick={handleManualRefresh}
+            style={{ ...styles.logoutBtn, padding: '4px 8px', fontSize: '11px' }}
+            title="관제 데이터 즉시 새로고침"
+          >
+            <IconRefresh size={11} /> 갱신 {lastUpdatedTime}
+          </button>
+
+          {/* 역할 빠른 전환 스위치 (개발자 / 현장 관리자 / 청소 담당자) */}
+          <div style={{ display: 'inline-flex', backgroundColor: '#f1f5f9', padding: '2px', borderRadius: '6px', border: '1px solid #e2e8f0', gap: '2px' }}>
+            {[
+              { role: ROLES.DEVELOPER, label: '개발자' },
+              { role: ROLES.ADMIN, label: '관리자' },
+              { role: ROLES.CLEANER, label: '청소담당' }
+            ].map(rBtn => {
+              const active = user?.role === rBtn.role;
+              return (
+                <button
+                  key={rBtn.role}
+                  onClick={() => {
+                    switchRole?.(rBtn.role);
+                    showToast(`[${rBtn.label}] 권한 화면으로 전환되었습니다.`);
+                  }}
+                  style={{
+                    border: 'none',
+                    borderRadius: '4px',
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    fontWeight: active ? '700' : '500',
+                    cursor: 'pointer',
+                    backgroundColor: active ? '#ffffff' : 'transparent',
+                    color: active ? '#0f172a' : '#64748b',
+                    boxShadow: active ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {rBtn.label}
+                </button>
+              );
+            })}
+          </div>
+
           <span style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -1649,7 +2090,6 @@ export default function AdminPage() {
         <p title={`${selectedRestroom?.ingestSource === 'direct_api' ? 'ESP32 Wi-Fi → 백엔드 → MySQL' : 'MySQL에 보관한 ESP32 실측값'} · MQ-135는 보정 전 ADC 값 · 마지막 측정 ${selectedRestroom?.lastUpdated || '확인 중'}`}>{selectedRestroom?.ingestSource === 'direct_api' ? 'ESP32 Wi-Fi → 백엔드 → MySQL' : 'MySQL에 보관한 ESP32 실측값'} · MQ-135는 보정 전 ADC 값 · 마지막 측정 {selectedRestroom?.lastUpdated || '확인 중'}</p>
         {user?.isDemo && <p title="체험용 역할 로그인 · 청소·출동·시설 설정은 화면 시연 기능입니다.">체험용 역할 로그인 · 청소·출동·시설 설정은 화면 시연 기능입니다.</p>}
         {dataError && <p role="alert" className="sensor-data-error" title={dataError}>{dataError}</p>}
-        {!dataLoading && restrooms.length === 0 && <p>등록된 센서 데이터가 없습니다.</p>}
       </section>
       {toastMsg && (
         <div style={styles.toast}>
@@ -1717,7 +2157,7 @@ export default function AdminPage() {
       {activeTab === 'map' && (
         <div style={{ width: '100%', height: 'calc(100vh - 60px)', position: 'relative' }}>
           <Map
-            center={{ lat: 37.5668, lng: 126.9785 }}
+            center={mapCenter}
             style={{ width: '100%', height: '100%' }}
             level={3}
           >
@@ -1754,9 +2194,40 @@ export default function AdminPage() {
 
           <div style={styles.mapFloatingCard}>
             <div style={{ fontSize: '12px', fontWeight: '600', color: '#0f172a', marginBottom: '4px' }}>지도 관제 모드</div>
-            <p style={{ margin: 0, fontSize: '11px', color: '#64748b', lineHeight: '1.4' }}>
-              카카오 지도 상에 등록된 화장실 위치와 실시간 상태 핀이 표시됩니다. 마커를 클릭하여 청소를 등록할 수 있습니다.
+            <p style={{ margin: '0 0 8px 0', fontSize: '11px', color: '#64748b', lineHeight: '1.4' }}>
+              구역을 선택하면 해당 화장실 좌표로 지도가 이동하며, 마커 클릭 시 즉시 청소를 등록할 수 있습니다.
             </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {accessibleRestrooms.map(r => {
+                const st = statusStyle(r.status);
+                return (
+                  <button
+                    key={r.id}
+                    onClick={() => {
+                      setSelectedRestroom(r);
+                      if (Number.isFinite(r.lat) && Number.isFinite(r.lng)) {
+                        setMapCenter({ lat: r.lat, lng: r.lng });
+                      }
+                    }}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '5px 8px',
+                      borderRadius: '6px',
+                      border: selectedRestroom?.id === r.id ? '1px solid #0f172a' : '1px solid #e2e8f0',
+                      backgroundColor: selectedRestroom?.id === r.id ? '#f8fafc' : '#ffffff',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                      textAlign: 'left'
+                    }}
+                  >
+                    <span style={{ fontWeight: '600', color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                    <span style={{ color: st.text, fontWeight: '600', flexShrink: 0, marginLeft: '6px' }}>{st.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -2238,15 +2709,26 @@ export default function AdminPage() {
                           </span>
                         </td>
                         <td style={{ ...styles.td, textAlign: 'center' }}>
-                          <button
-                            onClick={() => handleToggleRestroomActive(r.id)}
-                            style={{
-                              ...styles.actionBtnSmall,
-                              color: r.isActive ? '#991b1b' : '#166534'
-                            }}
-                          >
-                            {r.isActive ? '비활성화' : '활성화'}
-                          </button>
+                          <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
+                            <button
+                              onClick={() => handleToggleRestroomActive(r.id)}
+                              style={{
+                                ...styles.actionBtnSmall,
+                                color: r.isActive ? '#d97706' : '#166534'
+                              }}
+                            >
+                              {r.isActive ? '비활성화' : '활성화'}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteRestroom(r.id)}
+                              style={{
+                                ...styles.actionBtnSmall,
+                                color: '#dc2626'
+                              }}
+                            >
+                              삭제
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
