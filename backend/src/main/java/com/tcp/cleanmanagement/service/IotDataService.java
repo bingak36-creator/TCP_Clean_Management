@@ -58,6 +58,7 @@ public class IotDataService {
             if (registeredSet.isPresent()) {
                 DeviceSet set = registeredSet.get();
                 Map<String, Long> ids = new HashMap<>();
+                int gasCount = 0;
                 for (Sensor sensor : sensorRepository.findByDeviceSetIdOrderByIdAsc(set.getId())) {
                     if (sensor.getSensorModel() != null) {
                         ids.put(sensor.getSensorModel().name(), sensor.getId());
@@ -68,7 +69,12 @@ public class IotDataService {
                         ids.put("DHT11", sensor.getId());
                         ids.put("DHT22", sensor.getId());
                     } else if (sensor.getSensorType() == SensorType.GAS) {
-                        ids.put("MQ135", sensor.getId());
+                        if (gasCount == 0) {
+                            ids.put("MQ135", sensor.getId());
+                        } else {
+                            ids.put("MQ7", sensor.getId());
+                        }
+                        gasCount++;
                     }
                 }
                 return DeviceSetResponse.builder()

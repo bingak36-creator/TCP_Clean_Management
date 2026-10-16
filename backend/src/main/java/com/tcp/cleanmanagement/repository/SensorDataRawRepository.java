@@ -3,6 +3,7 @@ package com.tcp.cleanmanagement.repository;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.DeviceSetHistory;
 import com.tcp.cleanmanagement.enums.MetricCode;
+import com.tcp.cleanmanagement.enums.SensorModel;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -36,4 +37,7 @@ public interface SensorDataRawRepository extends JpaRepository<SensorDataRaw, Lo
 
     Optional<SensorDataRaw> findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(
             Long zoneId, MetricCode metricCode);
+
+    Optional<SensorDataRaw> findFirstByMetricSensorZoneIdAndMetricSensorSensorModelOrderByMeasuredAtDescIdDesc(
+            Long zoneId, SensorModel sensorModel);
 }

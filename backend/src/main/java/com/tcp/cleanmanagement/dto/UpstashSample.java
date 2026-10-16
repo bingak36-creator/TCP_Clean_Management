@@ -13,4 +13,10 @@ public record UpstashSample(
         @JsonProperty("dht_ok") Boolean dhtOk,
         @JsonProperty("temperature_c") BigDecimal temperatureC,
         @JsonProperty("humidity_percent") BigDecimal humidityPercent,
-        @JsonProperty("mq135_adc") BigDecimal mq135Adc) {}
+        @JsonProperty("mq135_adc") BigDecimal mq135Adc,
+        @JsonProperty("mq7_adc") BigDecimal mq7Adc) {
+    public UpstashSample(String source, String macAddress, String sampleKey, String measuredAt,
+                         Boolean dhtOk, BigDecimal temperatureC, BigDecimal humidityPercent, BigDecimal mq135Adc) {
+        this(source, macAddress, sampleKey, measuredAt, dhtOk, temperatureC, humidityPercent, mq135Adc, null);
+    }
+}

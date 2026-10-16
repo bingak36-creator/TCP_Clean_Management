@@ -5,6 +5,7 @@ import com.tcp.cleanmanagement.dto.ZoneStatusResponse;
 import com.tcp.cleanmanagement.entity.SensorDataRaw;
 import com.tcp.cleanmanagement.entity.Zone;
 import com.tcp.cleanmanagement.enums.MetricCode;
+import com.tcp.cleanmanagement.enums.SensorModel;
 import com.tcp.cleanmanagement.enums.ZoneType;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import com.tcp.cleanmanagement.repository.ZoneRepository;
@@ -54,14 +55,21 @@ public class PublicZoneService {
                 .longitude(zone.getLongitude())
                 .isOurSolution(zone.getIsOurSolution());
 
-        Optional<SensorDataRaw> latestData = latestReading(zone.getId(), MetricCode.GAS);
+        Optional<SensorDataRaw> latestMq135 = latestSensorReading(zone.getId(), SensorModel.MQ135);
+        if (latestMq135.isEmpty()) {
+            latestMq135 = latestReading(zone.getId(), MetricCode.GAS);
+        }
+        Optional<SensorDataRaw> latestMq7 = latestSensorReading(zone.getId(), SensorModel.MQ7);
+
         latestReading(zone.getId(), MetricCode.TEMPERATURE)
                 .ifPresent(data -> builder.temp(data.getMeasuredValue().floatValue()));
         latestReading(zone.getId(), MetricCode.HUMIDITY)
                 .ifPresent(data -> builder.humidity(data.getMeasuredValue().floatValue()));
+        latestMq7
+                .ifPresent(data -> builder.mq7Level(data.getMeasuredValue().floatValue()));
 
-        if (latestData.isPresent()) {
-            SensorDataRaw data = latestData.get();
+        if (latestMq135.isPresent()) {
+            SensorDataRaw data = latestMq135.get();
             float gasLevel = data.getMeasuredValue().floatValue();
             builder.gasLevel(gasLevel);
 
@@ -89,6 +97,11 @@ public class PublicZoneService {
     private Optional<SensorDataRaw> latestReading(Long zoneId, MetricCode metricCode) {
         return sensorDataRawRepository
                 .findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(zoneId, metricCode);
+    }
+
+    private Optional<SensorDataRaw> latestSensorReading(Long zoneId, SensorModel sensorModel) {
+        return sensorDataRawRepository
+                .findFirstByMetricSensorZoneIdAndMetricSensorSensorModelOrderByMeasuredAtDescIdDesc(zoneId, sensorModel);
     }
 
     @Transactional(readOnly = true)

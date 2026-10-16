@@ -59,7 +59,8 @@ public class SensorViewService {
         }
         boolean dhtOk = Boolean.TRUE.equals(sample.dhtOk());
         return new Point(sample.sampleKey(), OffsetDateTime.parse(sample.measuredAt()).toInstant(),
-                dhtOk ? sample.temperatureC() : null, dhtOk ? sample.humidityPercent() : null, sample.mq135Adc());
+                dhtOk ? sample.temperatureC() : null, dhtOk ? sample.humidityPercent() : null,
+                sample.mq135Adc(), sample.mq7Adc());
     }
 
     private Snapshot snapshot(UpstashDevice device, Point point, Instant importedAt, String source, String ingestSource) {
@@ -68,7 +69,8 @@ public class SensorViewService {
         boolean stale = measuredAt == null || measuredAt.isBefore(Instant.now().minus(Duration.ofMinutes(5)));
         return new Snapshot(zone.getId(), device.getMacAddress(), zone.getName(), zone.getLatitude(), zone.getLongitude(),
                 point == null ? null : point.temperatureC(), point == null ? null : point.humidityPercent(),
-                point == null ? null : point.mq135Adc(), measuredAt, importedAt, source, ingestSource, stale);
+                point == null ? null : point.mq135Adc(), point == null ? null : point.mq7Adc(),
+                measuredAt, importedAt, source, ingestSource, stale);
     }
 
     private void validateSource(String source) {
@@ -78,8 +80,20 @@ public class SensorViewService {
     }
 
     public record Point(String sampleKey, Instant measuredAt, BigDecimal temperatureC,
-                        BigDecimal humidityPercent, BigDecimal mq135Adc) {}
+                        BigDecimal humidityPercent, BigDecimal mq135Adc, BigDecimal mq7Adc) {
+        public Point(String sampleKey, Instant measuredAt, BigDecimal temperatureC,
+                     BigDecimal humidityPercent, BigDecimal mq135Adc) {
+            this(sampleKey, measuredAt, temperatureC, humidityPercent, mq135Adc, null);
+        }
+    }
     public record Snapshot(Long zoneId, String macAddress, String name, Double latitude, Double longitude,
-                           BigDecimal temperatureC, BigDecimal humidityPercent, BigDecimal mq135Adc,
-                           Instant measuredAt, Instant importedAt, String source, String ingestSource, boolean stale) {}
+                           BigDecimal temperatureC, BigDecimal humidityPercent, BigDecimal mq135Adc, BigDecimal mq7Adc,
+                           Instant measuredAt, Instant importedAt, String source, String ingestSource, boolean stale) {
+        public Snapshot(Long zoneId, String macAddress, String name, Double latitude, Double longitude,
+                        BigDecimal temperatureC, BigDecimal humidityPercent, BigDecimal mq135Adc,
+                        Instant measuredAt, Instant importedAt, String source, String ingestSource, boolean stale) {
+            this(zoneId, macAddress, name, latitude, longitude, temperatureC, humidityPercent, mq135Adc, null,
+                 measuredAt, importedAt, source, ingestSource, stale);
+        }
+    }
 }

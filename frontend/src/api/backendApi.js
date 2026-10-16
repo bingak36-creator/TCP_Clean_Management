@@ -51,6 +51,7 @@ export const fetchBackendZones = async (category, userLat = null, userLon = null
         temp: item.temp,
         humidity: item.humidity,
         gas: item.gasLevel != null ? `${item.gasLevel} ADC` : '측정 없음',
+        mq7: item.mq7Level != null ? `${item.mq7Level} ADC` : null,
         airQuality: '보정 전 센서값',
         status: item.status || '측정 없음',
         color: item.color || (category === 'restroom' ? '#10b981' : '#3b82f6'),

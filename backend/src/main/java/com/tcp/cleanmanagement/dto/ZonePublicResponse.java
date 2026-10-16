@@ -16,6 +16,7 @@ public class ZonePublicResponse {
     private Float temp;
     private Float humidity;
     private Float gasLevel;
+    private Float mq7Level;
     
     // Status (e.g. "쾌적", "혼잡", "경고")
     private String status;

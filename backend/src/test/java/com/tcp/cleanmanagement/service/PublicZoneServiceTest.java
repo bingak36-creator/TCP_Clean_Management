@@ -59,6 +59,20 @@ class PublicZoneServiceTest {
         assertEquals("No Data", response.getStatus());
     }
 
+    @Test
+    void exposesMq7SensorReadingWhenPresent() {
+        when(zoneRepository.findAll()).thenReturn(List.of(Zone.builder()
+                .id(1L).zoneType(ZoneType.TOILET).pleasantThreshold(50.0f).build()));
+        when(rawRepository.findFirstByMetricSensorZoneIdAndMetricSensorSensorModelOrderByMeasuredAtDescIdDesc(
+                1L, com.tcp.cleanmanagement.enums.SensorModel.MQ7))
+                .thenReturn(Optional.of(SensorDataRaw.builder().measuredValue(new BigDecimal("123.4")).build()));
+        stubReading(MetricCode.GAS, "15.0");
+
+        var response = service.getZones(null, null, null, null).get(0);
+        assertEquals(15.0f, response.getGasLevel());
+        assertEquals(123.4f, response.getMq7Level());
+    }
+
     private void stubReading(MetricCode code, String value) {
         when(rawRepository.findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(1L, code))
                 .thenReturn(Optional.of(SensorDataRaw.builder().measuredValue(new BigDecimal(value)).build()));

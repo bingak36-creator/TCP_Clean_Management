@@ -513,6 +513,7 @@ const buildFallbackHistoryPoints = (restroom, range) => {
   const baseTemp = Number(restroom?.temp) || 23.5;
   const baseHum = Number(restroom?.humidity) || 50.0;
   const baseGas = Number(restroom?.gas) || 240;
+  const baseMq7 = Number(restroom?.mq7) || 120;
   const seed = Number(restroom?.id) || 1;
 
   return Array.from({ length: count + 1 }, (_, idx) => {
@@ -522,7 +523,8 @@ const buildFallbackHistoryPoints = (restroom, range) => {
       measuredAt: new Date(now - (count - idx) * stepMs).toISOString(),
       temperatureC: Number((baseTemp + wave * 1.1).toFixed(1)),
       humidityPercent: Number((baseHum + cosWave * 3.5).toFixed(1)),
-      mq135Adc: Math.max(80, Math.round(baseGas + wave * 42 + (idx === count ? 0 : cosWave * 18)))
+      mq135Adc: Math.max(80, Math.round(baseGas + wave * 42 + (idx === count ? 0 : cosWave * 18))),
+      mq7Adc: Math.max(40, Math.round(baseMq7 + wave * 25 + (idx === count ? 0 : cosWave * 12)))
     };
   });
 };
@@ -746,6 +748,7 @@ export default function AdminPage() {
     const nextTemp = Number((22 + Math.random() * 8).toFixed(1));
     const nextHum = Number((45 + Math.random() * 30).toFixed(1));
     const nextGas = Math.round(180 + Math.random() * 580);
+    const nextMq7 = Math.round(70 + Math.random() * 200);
     const nowStr = new Date().toLocaleTimeString('ko-KR');
 
     setRestrooms(prev => prev.map(r => r.id === target.id ? {
@@ -753,6 +756,7 @@ export default function AdminPage() {
       temp: nextTemp,
       humidity: nextHum,
       gas: nextGas,
+      mq7: nextMq7,
       isActive: true,
       lastUpdated: nowStr
     } : r));
@@ -761,13 +765,13 @@ export default function AdminPage() {
       id: Date.now(),
       time: nowStr,
       deviceId: target.deviceId,
-      payload: `TEMP:${nextTemp},HUM:${nextHum},MQ135_ADC:${nextGas}`,
+      payload: `TEMP:${nextTemp},HUM:${nextHum},MQ135:${nextGas},MQ7:${nextMq7}`,
       status: 'OK'
     }, ...prev].slice(0, 20));
 
     setHistoryPoints(prev => [
       ...prev.slice(-23),
-      { measuredAt: new Date().toISOString(), temperatureC: nextTemp, humidityPercent: nextHum, mq135Adc: nextGas }
+      { measuredAt: new Date().toISOString(), temperatureC: nextTemp, humidityPercent: nextHum, mq135Adc: nextGas, mq7Adc: nextMq7 }
     ]);
 
     if (nextGas >= thresholds.gasWarn || nextTemp >= thresholds.tempWarn || nextHum >= thresholds.humidWarn) {
@@ -780,11 +784,11 @@ export default function AdminPage() {
         value: `${nextGas} ADC / ${nextTemp}℃`,
         level: isDanger ? 'DANGER' : 'WARN',
         isChecked: false,
-        memo: `실시간 패킷 수신 임계치 감지 (TEMP:${nextTemp}℃, HUM:${nextHum}%, MQ135:${nextGas} ADC)`
+        memo: `실시간 패킷 수신 임계치 감지 (TEMP:${nextTemp}℃, HUM:${nextHum}%, MQ135:${nextGas} ADC, MQ7:${nextMq7} ADC)`
       }, ...prev]);
     }
     setLastUpdatedTime(nowStr);
-    showToast(`[${target.name}] 실시간 센서 패킷 수신 완료 (MQ-135: ${nextGas} ADC)`);
+    showToast(`[${target.name}] 실시간 센서 패킷 수신 완료 (MQ-135: ${nextGas}, MQ-7: ${nextMq7})`);
   };
 
   // 수동 새로고침 핸들러
@@ -824,7 +828,7 @@ export default function AdminPage() {
             id: row.id,
             time: row.lastUpdated,
             deviceId: row.deviceId,
-            payload: `TEMP:${row.temp ?? '—'},HUM:${row.humidity ?? '—'},MQ135_ADC:${row.gas ?? '—'}`,
+            payload: `TEMP:${row.temp ?? '—'},HUM:${row.humidity ?? '—'},MQ135:${row.gas ?? '—'},MQ7:${row.mq7 ?? '—'}`,
             status: row.isActive ? 'OK' : 'FAIL'
           })));
         }
@@ -1227,7 +1231,8 @@ export default function AdminPage() {
       datasets: [
         { ...line, label: '온도 (℃)', data: series('temperatureC'), borderColor: '#0f172a', borderWidth: 2, yAxisID: 'yTemp' },
         { ...line, label: '습도 (%)', data: series('humidityPercent'), borderColor: '#64748b', borderWidth: 1.5, yAxisID: 'yHumid' },
-        { ...line, label: 'MQ-135 (ADC)', data: series('mq135Adc'), borderColor: '#94a3b8', borderDash: [4, 4], borderWidth: 1.5, yAxisID: 'yGas' }
+        { ...line, label: 'MQ-135 (ADC)', data: series('mq135Adc'), borderColor: '#94a3b8', borderDash: [4, 4], borderWidth: 1.5, yAxisID: 'yGas' },
+        { ...line, label: 'MQ-7 (ADC)', data: series('mq7Adc'), borderColor: '#f59e0b', borderDash: [2, 2], borderWidth: 1.5, yAxisID: 'yGas' }
       ]
     };
   };
@@ -1405,6 +1410,13 @@ export default function AdminPage() {
             <span style={styles.metricName}>MQ-135</span>
             <span style={{ ...styles.metricVal, color: item.gas >= thresholds.gasWarn ? '#dc2626' : '#0f172a' }}>
               {formatReading(item.gas)}
+              <span style={styles.unitText}>ADC</span>
+            </span>
+          </div>
+          <div style={styles.metricRow}>
+            <span style={styles.metricName}>MQ-7 (CO)</span>
+            <span style={{ ...styles.metricVal, color: item.mq7 >= thresholds.gasWarn ? '#dc2626' : '#0f172a' }}>
+              {formatReading(item.mq7)}
               <span style={styles.unitText}>ADC</span>
             </span>
           </div>

@@ -1,5 +1,6 @@
 package com.tcp.cleanmanagement.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.tcp.cleanmanagement.enums.MetricCode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Digits;
@@ -13,6 +14,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class SensorDataRequest {
     @NotNull
     @Pattern(regexp = "[A-Za-z0-9._:-]{1,64}")
@@ -27,6 +29,7 @@ public class SensorDataRequest {
     private List<@Valid Reading> readings;
 
     @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Reading {
         @NotNull
         private MetricCode metricCode;
@@ -34,5 +37,7 @@ public class SensorDataRequest {
         @NotNull
         @Digits(integer = 12, fraction = 6)
         private BigDecimal measuredValue;
+
+        private Boolean heaterPhaseValid;
     }
 }

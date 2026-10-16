@@ -70,6 +70,7 @@ frontend/.env.production.local
 
 # Local ESP32 sketches may contain Wi-Fi credentials
 *.ino
+!arduino/**/*.ino
 backups/
 /firmware/
 

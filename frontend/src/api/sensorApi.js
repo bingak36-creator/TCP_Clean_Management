@@ -36,6 +36,7 @@ export function snapshotToRestroom(device, index = 0) {
     temp: device.temperatureC,
     humidity: device.humidityPercent,
     gas: device.mq135Adc,
+    mq7: device.mq7Adc,
     status: device.stale ? 'OFFLINE' : 'RECEIVING',
     isActive: !device.stale,
     isLive: true,
