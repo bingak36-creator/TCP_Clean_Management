@@ -262,10 +262,8 @@ bool postReading(unsigned long sensorId, const String &payload) {
 // [5. WiFiManager 포털 관리 (라디오 버튼 듀얼 모드 지원)]
 // =============================================================================
 void setupConfigPortal(bool forcePortal) {
-  ticker.attach(0.2, tickLed);
-
   WiFiManager wm;
-  wm.setConnectTimeout(25);
+  wm.setConnectTimeout(20);
 
   // 1) 전송 모드 선택 UI (라디오 버튼 + 실시간 Show/Hide 토글 자바스크립트)
   String modeHtml =
@@ -359,6 +357,7 @@ void setupConfigPortal(bool forcePortal) {
   wm.setSaveConfigCallback(saveCallback);
 
   if (forcePortal) {
+    ticker.attach(0.2, tickLed);
     Serial.println("\n========================================================");
     Serial.println("[SETUP] AP 설정 모드 실행 (SSID: ESP32_Setup, PW: 12345678)");
     Serial.println("[SETUP] 접속 후 브라우저(192.168.4.1)에서 [Configure WiFi]를 누르세요.");
@@ -366,15 +365,18 @@ void setupConfigPortal(bool forcePortal) {
     wm.setConfigPortalTimeout(0);
     wm.startConfigPortal("ESP32_Setup", "12345678");
     saveCallback();
+    ticker.detach();
     Serial.println("[SETUP] 설정 저장 완료. 기기를 재부팅합니다...");
     delay(1000);
     ESP.restart();
   } else {
     Serial.println("[INIT] 저장된 Wi-Fi로 접속 시도 중...");
+    wm.setConfigPortalTimeout(120);
     if (!wm.autoConnect("ESP32_Setup", "12345678")) {
-      Serial.println("[INIT] Wi-Fi 연결 실패. 기기를 재부팅합니다.");
+      Serial.println("[INIT] Wi-Fi 연결 실패 또는 타임아웃. AP 설정 모드로 전환합니다.");
       delay(1000);
-      ESP.restart();
+      setupConfigPortal(true);
+      return;
     }
     saveCallback();
   }
@@ -445,8 +447,6 @@ void setup() {
     analogSetPinAttenuation(MQ7_ADC_PIN, ADC_11db);
   }
 
-  WiFi.disconnect(true);
-  delay(100);
   WiFi.mode(WIFI_STA);
   WiFi.setTxPower(WIFI_POWER_8_5dBm); // 전력 소모 및 전압 강하 방지 (피크 350mA -> 120mA 절감)
 
