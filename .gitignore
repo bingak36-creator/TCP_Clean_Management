@@ -87,6 +87,11 @@ redis-data/
 .env.test.local
 .env.production.local
 .env.*
+*.env
+backend.env
+backend/config/*.env
+!.env.example
+!*.env.example
 
 # Application Secrets / Keystores
 *.jks
