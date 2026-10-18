@@ -7,6 +7,6 @@ import lombok.Data;
 public class ZoneStatusResponse {
     private Long zoneId;
     private String name;
-    private String status; // PLEASANT, NORMAL, NEEDS_VENTILATION
+    private String status; // NORMAL, WARN, DANGER, UNKNOWN, NO_DATA, STALE, INACTIVE
     private String statusMessage;
 }

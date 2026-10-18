@@ -25,7 +25,7 @@ import java.time.ZoneOffset;
 import java.math.BigDecimal;
 
 @Component
-@ConditionalOnProperty(name = "app.seed-demo-data", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(name = "app.seed-demo-data", havingValue = "true", matchIfMissing = false)
 @RequiredArgsConstructor
 public class DummyDataInitializer implements CommandLineRunner {
 

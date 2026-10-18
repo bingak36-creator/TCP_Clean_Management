@@ -1,78 +1,55 @@
-﻿version: '3.8'
-
 services:
   mysql:
     image: mysql:8.0
-    container_name: tcp-mysql
-    ports:
-      - "3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set a unique root database password}
       MYSQL_DATABASE: tcp_clean_db
       MYSQL_USER: tcp_user
-      MYSQL_PASSWORD: tcp_password
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set a unique application database password}
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
-      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -u tcp_user -p$$MYSQL_PASSWORD -e 'SELECT 1' >/dev/null 2>&1"]
+      test: [CMD-SHELL, 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u tcp_user -e "SELECT 1" >/dev/null 2>&1']
       interval: 5s
       timeout: 3s
       retries: 20
-    volumes:
-      - mysql-data:/var/lib/mysql
-    networks:
-      - tcp-network
-
+    volumes: [mysql-data:/var/lib/mysql]
+    networks: [data]
   redis:
     image: redis:7-alpine
-    container_name: tcp-redis
-    ports:
-      - "6379:6379"
-    command: redis-server --requirepass redispass
-    volumes:
-      - redis-data:/data
-    networks:
-      - tcp-network
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: tcp-backend
-    ports:
-      - "8080:8080"
     environment:
-      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/tcp_clean_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
-      - SPRING_DATASOURCE_USERNAME=tcp_user
-      - SPRING_DATASOURCE_PASSWORD=tcp_password
-      - SPRING_DATA_REDIS_HOST=redis
-      - SPRING_DATA_REDIS_PASSWORD=redispass
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set a unique Redis password}
+    command: [sh, -c, 'exec redis-server --requirepass "$$REDIS_PASSWORD"']
+    networks: [data]
+  backend:
+    build: ./backend
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/tcp_clean_db?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: tcp_user
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD:?Set the application database password}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?Set the Redis password}
+      TCP_BOOTSTRAP_USERNAME: ${TCP_BOOTSTRAP_USERNAME:-}
+      TCP_BOOTSTRAP_PASSWORD: ${TCP_BOOTSTRAP_PASSWORD:-}
+      AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-28800}
+      SEED_DEMO_DATA: 'false'
+      KAKAO_REST_API_KEY: ${KAKAO_REST_API_KEY:-}
+      UPSTASH_SYNC_ENABLED: ${UPSTASH_SYNC_ENABLED:-true}
+      UPSTASH_REDIS_URL: ${UPSTASH_REDIS_URL:-}
+      UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN:-}
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    networks:
-      - tcp-network
-
-  # [React ?꾨줎?몄뿏??而⑦뀒?대꼫]
-  # ??먮텇??frontend ?대뜑??React 肄붾뱶瑜?梨꾩썙?ｌ쑝?쒕㈃ ?꾨옒 二쇱꽍???怨??ㅽ뻾?섏꽭??
+      mysql: {condition: service_healthy}
+      redis: {condition: service_started}
+    networks: [edge, data]
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: tcp-frontend
-    ports:
-      - "3000:80" # Nginx媛 ?대??곸쑝濡?80踰??ы듃瑜??곷땲??
-    depends_on:
-      - backend
-    networks:
-      - tcp-network
-
+    build: ./frontend
+    ports: ['80:80', '443:443']
+    volumes:
+      - ${TLS_CERT_DIR:?Set the directory containing fullchain.pem and privkey.pem}:/etc/nginx/tls:ro
+    depends_on: [backend]
+    networks: [edge]
 networks:
-  tcp-network:
-    driver: bridge
-
+  edge:
+  data: {internal: true}
 volumes:
   mysql-data:
-  redis-data:
-

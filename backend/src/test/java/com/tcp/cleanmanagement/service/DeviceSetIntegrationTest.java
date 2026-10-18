@@ -40,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @Transactional
 class DeviceSetIntegrationTest {
     @Autowired DeviceSetService sets;
+    @Autowired OperationalSettingsService operationalSettings;
     @Autowired IotDataService ingestion;
     @Autowired ZoneRepository zones;
     @Autowired SensorRepository sensors;
@@ -99,7 +100,7 @@ class DeviceSetIntegrationTest {
         assertNotEquals(originalHistoryId, latest.getDeviceSetHistory().getId());
 
         // Simulate delayed async analysis of a reading accepted before the move.
-        new AnalyticsService(raw, alerts).handleSensorDataSaved(new SensorDataSavedEvent(originalDataId));
+        new AnalyticsService(raw, alerts, sensors, operationalSettings).handleSensorDataSaved(new SensorDataSavedEvent(originalDataId));
         AlertResponse alert = adminAlerts.getUnresolvedAlerts().stream()
                 .filter(value -> dhtId.equals(value.getSensorId())).findFirst().orElseThrow();
         assertEquals(originalZone.getId(), alert.getZoneId());
@@ -228,7 +229,9 @@ class DeviceSetIntegrationTest {
         Zone zone = zone();
         DeviceSetResponse first = sets.register(registration(zone, "first"));
         DeviceSetRequest second = registration(zone, "second");
-        second.setExistingSensorIds(first.getSensorIds());
+        Map<SensorModel, Long> existingIds = new EnumMap<>(SensorModel.class);
+        for (SensorModel model : SensorModel.values()) existingIds.put(model, first.getSensorIds().get(model));
+        second.setExistingSensorIds(existingIds);
         ResponseStatusException conflict = assertThrows(ResponseStatusException.class, () -> sets.register(second));
         assertEquals(HttpStatus.CONFLICT, conflict.getStatusCode());
         assertEquals(first.getSensorIds(), sets.configurationFor(first.getMacAddress()).getSensorIds());

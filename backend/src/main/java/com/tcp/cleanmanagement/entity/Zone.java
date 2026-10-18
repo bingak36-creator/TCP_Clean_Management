@@ -16,6 +16,8 @@ public class Zone {
 
     private String name;
     private String address;
+    @Column(length=8) private String floor;
+    @Column(length=8) private String gender;
     private Double latitude;
     private Double longitude;
 
@@ -23,8 +25,14 @@ public class Zone {
     private ZoneType zoneType;
 
     private Boolean isOurSolution;
+    @Builder.Default
+    private Boolean isActive = true;
     private Float pleasantThreshold;
     private Float needsVentilationThreshold;
+
+    private Long assignedWorkerId;
+    @Column(length = 50)
+    private String assignedWorkerName;
 
     @CreationTimestamp
     private LocalDateTime createdAt;

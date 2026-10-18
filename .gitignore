@@ -42,6 +42,7 @@ backend/out/
 backend/bin/
 backend/scripts/__pycache__/
 backend/src/main/generated/
+backend/src/main/resources/static/
 
 # Log files
 *.log
@@ -109,3 +110,6 @@ arduino/**/build/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Local deployment certificates and private runtime artifacts
+.local/

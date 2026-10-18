@@ -1,0 +1,5 @@
+build/
+.gradle/
+ai/.venv/
+ai/**/__pycache__/
+*.log

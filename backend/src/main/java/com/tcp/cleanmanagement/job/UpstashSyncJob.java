@@ -45,7 +45,15 @@ public class UpstashSyncJob {
                         var page = historyReader.readPage(mac, startScore, offset);
                         if (page.isEmpty()) break;
                         for (var item : page) {
-                            if (importService.importSample(mac, item.getScore(), item.getValue())) imported++;
+                            try {
+                                if (importService.importSample(mac, item.getScore(), item.getValue())) imported++;
+                            } catch (RuntimeException error) {
+                                // Transient failures stop here and retry; a rejected packet would block the device forever.
+                                if (!UpstashImportService.isRejectedPacket(error)) throw error;
+                                importService.skipRejectedSample(mac, item.getScore());
+                                log.warn("Upstash packet for {} at score {} rejected and skipped ({})",
+                                        mac, (long) item.getScore(), error.getClass().getSimpleName());
+                            }
                         }
                         offset += page.size();
                         if (page.size() < Math.max(1, Math.min(properties.getBatchSize(), 1000))) break;

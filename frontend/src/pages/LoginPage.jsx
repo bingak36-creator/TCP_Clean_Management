@@ -2,36 +2,12 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 
-// 모던 B2B SVG 라인 아이콘 (Lucide 규격: 개발자=Terminal, 관리자=ShieldCheck, 청소담당=Broom)
-const IconRoleDeveloper = ({ size = 15, color = 'currentColor' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="m4 17 6-6-6-6" />
-    <path d="M12 19h8" />
-  </svg>
-);
-
-const IconRoleAdmin = ({ size = 15, color = 'currentColor' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
-    <path d="m9 12 2 2 4-4" />
-  </svg>
-);
-
-const IconRoleCleaner = ({ size = 15, color = 'currentColor' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M13.5 10.5 22 2" />
-    <path d="M14.734 13.841a2 2 0 0 0-.314-2.42L12.58 9.58a2 2 0 0 0-2.421-.314l-7.657 4.461A1 1 0 0 0 2.3 15.3l6.403 6.403a1 1 0 0 0 1.571-.204z" />
-    <path d="m5 18 2-2" />
-    <path d="m7.699 10.7 5.602 5.601" />
-  </svg>
-);
-
 export default function LoginPage() {
-  const [userId, setUserId] = useState('admin');
-  const [password, setPassword] = useState('1234');
+  const [userId, setUserId] = useState('');
+  const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { login } = useAuth();
+  const { login, isLoading } = useAuth();
   const navigate = useNavigate();
 
   const handleLogin = async (e) => {
@@ -53,13 +29,6 @@ export default function LoginPage() {
     }
   };
 
-  // 체험용 역할 빠른 채우기
-  const selectQuickRole = (roleUsername) => {
-    setUserId(roleUsername);
-    setPassword('1234');
-    setErrorMsg('');
-  };
-
   return (
     <div style={styles.container}>
       <div style={styles.loginBox}>
@@ -67,47 +36,7 @@ export default function LoginPage() {
           <span style={styles.badge}>TCP CLEAN 관제</span>
         </div>
         <h2 style={styles.title}>시스템 로그인</h2>
-        <p style={styles.subtitle}>역할별 관제 화면 · 로컬 체험 계정</p>
-
-        {/* 역할별 빠른 테스트 선택 버튼 */}
-        <div style={styles.quickRoleBox}>
-          <div style={styles.quickRoleTitle}>테스트 역할 빠른 선택:</div>
-          <div style={styles.roleGrid}>
-            <button
-              type="button"
-              onClick={() => selectQuickRole('developer')}
-              style={{
-                ...styles.roleChip,
-                ...(userId === 'developer' ? styles.roleChipActiveDev : {})
-              }}
-            >
-              <IconRoleDeveloper size={15} color={userId === 'developer' ? '#6366f1' : '#64748b'} />
-              <span>개발자</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => selectQuickRole('admin')}
-              style={{
-                ...styles.roleChip,
-                ...(userId === 'admin' ? styles.roleChipActiveAdmin : {})
-              }}
-            >
-              <IconRoleAdmin size={15} color={userId === 'admin' ? '#2563eb' : '#64748b'} />
-              <span>관리자</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => selectQuickRole('cleaner')}
-              style={{
-                ...styles.roleChip,
-                ...(userId === 'cleaner' ? styles.roleChipActiveCleaner : {})
-              }}
-            >
-              <IconRoleCleaner size={15} color={userId === 'cleaner' ? '#059669' : '#64748b'} />
-              <span>청소담당</span>
-            </button>
-          </div>
-        </div>
+        <p style={styles.subtitle}>등록된 계정으로 관제 화면에 로그인하세요.</p>
 
         {errorMsg && (
           <div style={styles.errorAlert}>
@@ -123,7 +52,7 @@ export default function LoginPage() {
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               style={styles.input}
-              placeholder="예: developer, admin, cleaner"
+              placeholder="계정 아이디"
               autoComplete="username"
             />
           </div>
@@ -134,14 +63,14 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               style={styles.input}
-              placeholder="비밀번호 (기본: 1234)"
+              placeholder="비밀번호"
               autoComplete="current-password"
             />
           </div>
           <button
             type="submit"
             style={styles.loginButton}
-            disabled={isSubmitting}
+            disabled={isSubmitting || isLoading}
           >
             {isSubmitting ? '인증 처리 중...' : `${userId || '사용자'} 계정으로 로그인`}
           </button>

@@ -10,6 +10,9 @@ import java.util.List;
 
 public interface ZoneRepository extends JpaRepository<Zone, Long> {
     
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT z FROM Zone z WHERE z.id=:id")
+    java.util.Optional<Zone> findByIdForUpdate(@Param("id") Long id);
     // Haversine formula
     @Query(value = "SELECT * FROM zones z WHERE (6371 * acos(cos(radians(:lat)) * cos(radians(z.latitude)) * cos(radians(z.longitude) - radians(:lng)) + sin(radians(:lat)) * sin(radians(z.latitude)))) <= :radius", nativeQuery = true)
     List<Zone> findZonesWithinRadius(@Param("lat") Double lat, @Param("lng") Double lng, @Param("radius") Double radius);
@@ -18,4 +21,5 @@ public interface ZoneRepository extends JpaRepository<Zone, Long> {
     List<Zone> findZonesByTypeAndRadius(@Param("type") String type, @Param("lat") Double lat, @Param("lng") Double lng, @Param("radius") Double radius);
     
     List<Zone> findByZoneType(ZoneType zoneType);
+    java.util.List<Zone> findByAssignedWorkerId(Long workerId);
 }

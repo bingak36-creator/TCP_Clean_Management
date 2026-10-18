@@ -10,10 +10,11 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SensorViewController {
     private final SensorViewService service;
+    private final com.tcp.cleanmanagement.security.AccessService access;
 
     @GetMapping
     public List<SensorViewService.Snapshot> snapshots(@RequestParam(defaultValue = "mysql") String source) {
-        return service.snapshots(source);
+        return service.snapshots(source).stream().filter(s -> access.canZone(s.zoneId())).toList();
     }
 
     @GetMapping("/{mac}/history")
@@ -21,6 +22,7 @@ public class SensorViewController {
             @RequestParam(defaultValue = "mysql") String source,
             @RequestParam(defaultValue = "1") int hours,
             @RequestParam(defaultValue = "200") int limit) {
-        return service.history(mac, source, hours, limit);
+        access.requireZone(service.zoneId(mac));
+        return service.history(mac,source,hours,limit,access.isDeveloper()?null:new java.util.HashSet<>(access.current().zoneIds()));
     }
 }

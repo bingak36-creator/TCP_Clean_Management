@@ -31,11 +31,20 @@ public class Alert {
 
     private String message;
 
+    @Builder.Default
+    @Column(nullable = false, columnDefinition = "varchar(16) default 'RULE'")
+    private String detectionSource = "RULE";
+    @Column(length = 64)
+    private String modelVersion;
+    @Column(length = 32)
+    private String level;
+
     @Enumerated(EnumType.STRING)
     private AlertStatus status;
 
-    @CreationTimestamp
     private LocalDateTime createdAt;
+    @PrePersist private void initializeCreatedAt(){if(createdAt==null)createdAt=LocalDateTime.now(java.time.ZoneOffset.UTC);}
     
     private LocalDateTime resolvedAt;
+    @Column(length=16) private String resolutionSource;
 }

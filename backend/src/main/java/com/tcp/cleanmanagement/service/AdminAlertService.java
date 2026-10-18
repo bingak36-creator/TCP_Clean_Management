@@ -32,6 +32,16 @@ public class AdminAlertService {
             .collect(Collectors.toList());
     }
 
+    @Transactional(readOnly=true)
+    public List<AlertResponse> getAlerts(String status) {
+        List<Alert> rows;
+        if("ALL".equals(status)) rows=alertRepository.findAll();
+        else {
+            try { rows=alertRepository.findByStatus(AlertStatus.valueOf(status)); }
+            catch(IllegalArgumentException error){throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Invalid alert status");}
+        }
+        return rows.stream().sorted(java.util.Comparator.comparing(Alert::getCreatedAt).reversed()).map(this::responseFor).toList();
+    }
     private AlertResponse responseFor(Alert alert) {
         DeviceSetHistory history = alert.getDeviceSetHistory();
         DeviceSet set = history != null ? history.getDeviceSet()
@@ -49,27 +59,46 @@ public class AdminAlertService {
                         : set == null ? null : set.getInstallationLabel())
                 .alertType(alert.getAlertType())
                 .message(alert.getMessage())
-                .createdAt(alert.getCreatedAt())
+                .detectionSource(alert.getDetectionSource())
+                .modelVersion(alert.getModelVersion())
+                .level(alert.getLevel())
+                .createdAt(alert.getCreatedAt()).status(alert.getStatus()).resolvedAt(alert.getResolvedAt()).resolutionSource(alert.getResolutionSource())
                 .build();
     }
 
     @Transactional
     public void resolveAlert(Long alertId, ActionRequest request) {
-        Alert alert = alertRepository.findById(alertId)
+        Alert alert = alertRepository.findByIdForUpdate(alertId)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid Alert ID"));
-        
+
+        if(alert.getStatus()==AlertStatus.RESOLVED)return;
         alert.setStatus(AlertStatus.RESOLVED);
-        alert.setResolvedAt(LocalDateTime.now());
+        alert.setResolutionSource("MANUAL");
+        alert.setResolvedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         alertRepository.save(alert);
 
-        // In a real app, User should be fetched using adminId from DB
-        User mockAdmin = User.builder().id(request.getAdminId()).build(); 
+        // Controller derives this foreign-key reference from the verified session.
+        User actorReference = User.builder().id(request.getAdminId()).build();
 
         ActionLog log = ActionLog.builder()
                 .alert(alert)
-                .admin(mockAdmin)
+                .admin(actorReference)
                 .actionDetail(request.getActionDetail())
                 .build();
         actionLogRepository.save(log);
+    }
+
+    @Transactional(readOnly=true)
+    public Long zoneId(Long id) { return alertRepository.findById(id).orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND)).getZone().getId(); }
+
+    @Transactional
+    public void resolveAllAlerts(ActionRequest request) { resolveAllAlerts(request, null); }
+
+    @Transactional
+    public void resolveAllAlerts(ActionRequest request, List<Long> allowedZones) {
+        List<Alert> unresolved = alertRepository.findByStatus(AlertStatus.UNRESOLVED);
+        for (Alert a : unresolved) {
+            if (allowedZones == null || allowedZones.contains(a.getZone().getId())) resolveAlert(a.getId(), request);
+        }
     }
 }

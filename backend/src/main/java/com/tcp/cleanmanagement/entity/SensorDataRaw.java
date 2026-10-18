@@ -11,7 +11,8 @@ import java.time.LocalDateTime;
 @Table(name = "sensor_data_raw", uniqueConstraints =
         @UniqueConstraint(name = "uq_raw_metric_sample", columnNames = {"metric_id", "sample_key"}), indexes = {
         @Index(name = "ix_raw_metric_time", columnList = "metric_id,measured_at,id"),
-        @Index(name = "ix_raw_cleanup", columnList = "measured_at")
+        @Index(name = "ix_raw_cleanup", columnList = "measured_at"),
+        @Index(name="ix_raw_device_packet",columnList="device_mac,measured_at,sample_key")
 })
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class SensorDataRaw {
@@ -28,6 +29,8 @@ public class SensorDataRaw {
 
     @Column(nullable = false, length = 64)
     private String sampleKey;
+    @Column(length=17) private String deviceMac;
+    @Builder.Default @Column(nullable=false,length=16) private String ingestSource="sensor_api";
 
     @Column(nullable = false, precision = 18, scale = 6)
     private BigDecimal measuredValue;

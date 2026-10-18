@@ -1,0 +1,32 @@
+spring:
+  flyway:
+    enabled: false
+  datasource:
+    url: jdbc:h2:mem:tcp_tests;MODE=MySQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+app:
+  traffic:
+    login-limit: 10000
+    account-limit: 10000
+    device-limit: 10000
+    iot-ip-limit: 10000
+  seed-demo-data: false
+  rate-limit:
+    store: memory
+    public-limit: 10000
+  scheduling:
+    enabled: false
+iot:
+  upstash:
+    enabled: false
+restroom-ai:
+  enabled: false

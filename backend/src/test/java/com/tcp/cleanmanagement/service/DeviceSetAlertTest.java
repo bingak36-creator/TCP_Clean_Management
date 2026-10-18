@@ -24,15 +24,18 @@ class DeviceSetAlertTest {
         DeviceSet set = DeviceSet.builder().id(2L).setCode("SET-002")
                 .zone(zone).installationLabel("washbasin").build();
         Sensor sensor = Sensor.builder().id(6L).zone(zone).deviceSet(set)
-                .sensorModel(SensorModel.DHT22).sensorType(SensorType.TEMP_HUMID).build();
+                .sensorModel(SensorModel.DHT22).sensorType(SensorType.TEMP_HUMID).status(SensorStatus.ACTIVE).build();
         SensorMetric metric = SensorMetric.builder().sensor(sensor).metricCode(MetricCode.TEMPERATURE).build();
         SensorDataRaw data = SensorDataRaw.builder().id(42L).metric(metric)
-                .measuredValue(new BigDecimal("-1")).build();
+                .measuredValue(new BigDecimal("-1")).measuredAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).build();
         SensorDataRawRepository dataRepository = mock(SensorDataRawRepository.class);
         AlertRepository alerts = mock(AlertRepository.class);
         when(dataRepository.findById(42L)).thenReturn(Optional.of(data));
 
-        new AnalyticsService(dataRepository, alerts).handleSensorDataSaved(new SensorDataSavedEvent(42L));
+        var sensors=mock(com.tcp.cleanmanagement.repository.SensorRepository.class);
+        when(sensors.findByIdForUpdate(sensor.getId())).thenReturn(Optional.of(sensor));
+        var settings=mock(OperationalSettingsService.class);when(settings.offlineSeconds()).thenReturn(90);when(settings.number("alert_cooldown_seconds")).thenReturn(300d);
+        new AnalyticsService(dataRepository, alerts, sensors, settings).handleSensorDataSaved(new SensorDataSavedEvent(42L));
         ArgumentCaptor<Alert> capture = ArgumentCaptor.forClass(Alert.class);
         verify(alerts).save(capture.capture());
         Alert created = capture.getValue();
