@@ -1,5 +1,5 @@
-import { parseUtcDate } from './backendApi';
-import { getAuthHeaders } from './backendApi';
+import { parseUtcDate, getAuthHeaders } from './backendApi';
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
 async function getJson(path, signal) {
@@ -38,8 +38,7 @@ export function snapshotToRestroom(device, index = 0) {
     gas: device.mq135Adc,
     mq7: device.mq7Adc,
     status: device.stale ? 'OFFLINE' : 'RECEIVING',
-    isActive: device.active !== false,
-    stale: device.stale,
+    isActive: !device.stale,
     isLive: true,
     source: device.source,
     ingestSource: device.ingestSource,
@@ -47,8 +46,8 @@ export function snapshotToRestroom(device, index = 0) {
     lastUpdated: device.measuredAt ? parseUtcDate(device.measuredAt).toLocaleTimeString('ko-KR') : '측정 없음',
     lastCleanedHours: 1.5,
     cleanWorker: '이순신',
-    lat: device.latitude ?? null,
-    lng: device.longitude ?? null
+    lat: device.latitude ?? 37.5668,
+    lng: device.longitude ?? 126.9785
   };
 }
 
