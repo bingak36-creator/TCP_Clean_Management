@@ -3,6 +3,7 @@ import com.tcp.cleanmanagement.entity.*;
 import com.tcp.cleanmanagement.repository.*;
 import com.tcp.cleanmanagement.security.DeviceIdentity;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +17,7 @@ public class DeviceCredentialService {
     private final DeviceCredentialRepository credentials; private final DeviceSetRepository sets;
     private final UpstashDeviceRepository devices; private final SensorRepository sensors;
     private final SecureRandom random=new SecureRandom();
+    @Value("${iot.device.shared-key:}") private String sharedKey="";
     public record Metadata(String macAddress,boolean enabled,LocalDateTime rotatedAt,Long rotatedBy) {}
     public record Issued(String macAddress,String key,LocalDateTime rotatedAt) {}
     public String normalize(String mac) {
@@ -34,12 +36,12 @@ public class DeviceCredentialService {
         String mac=normalize(value);registered(mac);return credentials.findById(mac).map(r->new Metadata(mac,r.isEnabled(),r.getRotatedAt(),r.getRotatedBy())).orElse(new Metadata(mac,false,null,null));
     }
     @Transactional(readOnly=true) public DeviceIdentity authenticate(String mac,String key) {
-        // Unknown, revoked, malformed and wrong keys all fail without revealing enrollment state.
-        if(mac==null || !mac.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}") || key==null || !key.matches("[A-Za-z0-9_-]{43}")) throw unauthorized();
+        // shortcut: 캡스톤 시연용으로 기기별 키 대신 모든 기기가 같은 공통 키를 쓴다(비우면 MAC만 확인). 실제 운영 전에는 기기별 키 비교를 되살린다.
+        if(mac==null || !mac.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) throw unauthorized();
+        if(!sharedKey.isBlank() && (key==null || !MessageDigest.isEqual(sharedKey.getBytes(StandardCharsets.UTF_8),key.getBytes(StandardCharsets.UTF_8)))) throw unauthorized();
         mac=mac.toUpperCase(Locale.ROOT);
-        var row=credentials.findById(mac).filter(DeviceCredential::isEnabled).orElseThrow(DeviceCredentialService::unauthorized);
-        if(!MessageDigest.isEqual(row.getKeyHash().getBytes(StandardCharsets.UTF_8),AuthService.hash(key).getBytes(StandardCharsets.UTF_8))) throw unauthorized();
-        registered(mac);return new DeviceIdentity(mac);
+        try { registered(mac); } catch(ResponseStatusException error) { throw unauthorized(); }
+        return new DeviceIdentity(mac);
     }
     @Transactional(readOnly=true) public void requireSensor(String mac,Long id) {
         var sensor=sensors.findById(id).orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Sensor not found"));

@@ -54,9 +54,9 @@ Ticker ticker;
 String destMode = "SERVER";
 
 // [모드 1] 스프링부트 서버 설정 (설정 포털 192.168.4.1 에서 입력받아 영구 저장)
-// 기본 호스트를 비워 두면 첫 부팅 시 포털이 열린다. 공인 HTTP 주소는 sendHttpRequest가 거부하므로 HTTPS(443)가 기본이다.
+// 기본 호스트를 비워 두면 첫 부팅 시 포털이 열린다. 캡스톤 서버(구글 클라우드 VM)는 HTTP 8080이 기본이다.
 String serverIp = "";
-String serverPort = "443";
+String serverPort = "8080";
 String deviceApiKey = "";
 String gpsLat = "", gpsLng = "";
 bool gpsSent = true;
@@ -152,40 +152,27 @@ void tickLed() {
 String getServerUrl() {
   String clean = serverIp;
   clean.trim();
+  // "http://1.2.3.4/"처럼 스킴을 붙여 입력해도 포트가 빠지지 않도록 스킴을 떼고 다시 조립한다.
+  const bool forceHttps = clean.startsWith("https://"), forceHttp = clean.startsWith("http://");
+  if (forceHttps) clean.remove(0, 8); else if (forceHttp) clean.remove(0, 7);
   while (clean.endsWith("/")) {
     clean.remove(clean.length() - 1);
   }
   if (clean.length() == 0) return "";
-  if (clean.startsWith("http://") || clean.startsWith("https://")) {
-    return clean;
-  }
-  if (serverPort == "443" || clean.indexOf(".ngrok") != -1 || clean.indexOf(".trycloudflare.com") != -1) {
-    return "https://" + clean;
-  } else if (serverPort == "80" || serverPort.length() == 0) {
-    return "http://" + clean;
-  } else {
-    return "http://" + clean + ":" + serverPort;
-  }
+  const bool tunnel = clean.indexOf(".ngrok") != -1 || clean.indexOf(".trycloudflare.com") != -1;
+  const bool https = forceHttps || (!forceHttp && (serverPort == "443" || tunnel));
+  const String scheme = https ? "https://" : "http://";
+  // 터널 주소, 포트를 직접 적은 주소, 스킴 기본 포트에는 포트를 붙이지 않는다.
+  if (tunnel || clean.indexOf(':') != -1 || serverPort.length() == 0 || serverPort == (https ? "443" : "80")) return scheme + clean;
+  return scheme + clean + ":" + serverPort;
 }
 
 // 통합 HTTP 요청 헬퍼 (ngrok 우회 헤더 포함, C++ 객체 생명주기 및 메모리 누수 방지 보장)
 int sendHttpRequest(const String &method, const String &url, const String &payload, String &responseBody) {
   const bool discovery = url == getServerUrl() + "/api/iot/discovery";
-  if (WiFi.status() != WL_CONNECTED || (!discovery && deviceApiKey.length() == 0) || deviceMac.length() == 0) return -1;
-  // Never send credentials over public HTTP. LAN HTTP requires an explicit build option.
-  if (!url.startsWith("https://")) {
-    String host = url.startsWith("http://") ? url.substring(7) : "";
-    int end = host.indexOf('/'); if (end >= 0) host = host.substring(0, end);
-    end = host.indexOf(':'); if (end >= 0) host = host.substring(0, end);
-    IPAddress ip;
-    bool privateIp = ip.fromString(host) && (ip[0] == 10
-      || (ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31)
-      || (ip[0] == 192 && ip[1] == 168));
-    if (!TCP_ALLOW_LAN_HTTP || !privateIp) {
-      Serial.println("[AUTH] 서버 전송에는 HTTPS와 신뢰할 CA가 필요합니다.");
-      return -1;
-    }
-  }
+  // 서버에 공통 키가 설정되지 않았으면 키가 비어 있어도 된다.
+  if (WiFi.status() != WL_CONNECTED || deviceMac.length() == 0) return -1;
+  // shortcut: 시연용으로 공인 IP의 일반 HTTP(예: 34.50.54.140:8080)도 허용하므로 공통 키가 평문으로 전송된다. 운영 전에는 HTTPS만 허용한다.
   int statusCode = -1;
 
   if (url.startsWith("https://")) {
@@ -513,7 +500,7 @@ void setupConfigPortal(bool forcePortal) {
         gpsSent=false;preferences.putBool("gpsSent",false);
       }
       serverIp = newIp;
-      serverPort = (newPort.length() > 0) ? newPort : "443";
+      serverPort = (newPort.length() > 0) ? newPort : "8080";
       preferences.putString("serverIp", serverIp);
       preferences.putString("serverPort", serverPort);
     }

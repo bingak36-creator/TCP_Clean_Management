@@ -18,6 +18,11 @@ public interface AlertRepository extends JpaRepository<Alert, Long> {
             String detectionSource, Long historyId);
     List<Alert> findBySensorIdAndAlertTypeAndDetectionSourceAndDeviceSetHistoryId(Long sensorId, com.tcp.cleanmanagement.enums.AlertType type,String source,Long historyId);
     List<Alert> findByStatus(AlertStatus status);
+    // 목록 화면용: 정렬은 DB에서, 응답에 쓰는 연관 엔터티는 한 번에 가져와 N+1을 막는다.
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths={"zone","sensor.deviceSet","deviceSetHistory.deviceSet"})
+    List<Alert> findAllByOrderByCreatedAtDescIdDesc();
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths={"zone","sensor.deviceSet","deviceSetHistory.deviceSet"})
+    List<Alert> findByStatusOrderByCreatedAtDescIdDesc(AlertStatus status);
 
     @Modifying
     @Query("UPDATE Alert a SET a.deviceSetHistory = :history " +

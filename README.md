@@ -28,7 +28,7 @@ ERD v2 중 **측정 항목 모델**은 백엔드에 적용했습니다. 계정, 
 
 원본의 2026-10-12 변경을 동기화해 React 프론트엔드, 공개 구역의 실제 센서 값 조회, ESP32 WiFiManager 기능을 포함합니다. 기존 `POST /api/iot/{sensorId}/data` 경로도 유지하며, ESP32의 선택 필드 `macAddress`와 측정 항목 배열을 받습니다. 공개 구역 API는 각 구역의 가스·온도·습도 최신 값을 별도로 조회합니다.
 
-`GET /api/iot/device-sets/by-mac/{mac}`는 등록된 장치의 센서 ID만 반환합니다. 설정 조회와 두 센서 수신 경로는 MAC별 인증 키를 요구합니다. `X-Device-Mac`과 `X-Device-Key`를 함께 보내며 본문의 MAC·대상 센서도 확인합니다. 공유 환경 변수 `IOT_DIRECT_API_KEY`는 폐지했습니다. [장치 설정 절차](arduino/esp32_dht22_mq7/README.md)와 [권한·배포·DB 이전 안내](docs/security-upgrade.md)를 참고하세요.
+`GET /api/iot/device-sets/by-mac/{mac}`는 등록된 장치의 센서 ID만 반환합니다. 캡스톤 시연용으로 기기별 키 대신 모든 장치가 같은 공통 키를 씁니다. 설정 조회와 센서 수신 경로는 등록된 MAC(`X-Device-Mac`)과, 환경 변수 `IOT_SHARED_DEVICE_KEY`가 설정된 경우 공통 키(`X-Device-Key`)를 확인하며 본문의 MAC·대상 센서도 확인합니다. 이 값을 비우면 MAC만 확인합니다. 공통 키는 한 장치에서 유출되면 모든 장치를 사칭할 수 있으므로 시연용으로만 씁니다. [장치 설정 절차](arduino/esp32_dht22_mq7/README.md)와 [권한·배포·DB 이전 안내](docs/security-upgrade.md)를 참고하세요.
 
 ## Upstash → MySQL 자동 저장
 
@@ -90,7 +90,7 @@ Flyway가 스키마를 버전별로 관리하며 JPA는 `validate`로 검사합�
 
 [공식 ESP32 펌웨어](arduino/esp32_dht22_mq7/esp32_dht22_mq7.ino)는 DHT11/22·MQ-135·MQ-7 값을 센서별 API로 전송합니다. 측정 시각·패킷 키를 먼저 영속 큐에 저장하고 확인 응답 후 제거합니다. [장치별 키·서버 CA·큐 설정](arduino/esp32_dht22_mq7/README.md)이 필요합니다. MySQL 비밀번호는 장치에 넣지 않습니다.
 
-전체 패킷을 보내는 별도 클라이언트는 `POST /api/iot/esp32`를 사용할 수 있습니다. 이 경로도 등록된 MAC의 장치 키와 `X-Device-Mac`이 필요합니다. 새 패킷은 201, 같은 패킷 재전송은 200입니다. 기존 Upstash 수집도 유지하며 정규화된 측정 행에 MAC·수집 출처를 기록합니다. 장치 목록과 이력 API는 모든 수집 경로의 이 측정 행을 조회합니다.
+전체 패킷을 보내는 별도 클라이언트는 `POST /api/iot/esp32`를 사용할 수 있습니다. 이 경로도 등록된 MAC의 `X-Device-Mac`이 필요합니다. 새 패킷은 201, 같은 패킷 재전송은 200입니다. 기존 Upstash 수집도 유지하며 정규화된 측정 행에 MAC·수집 출처를 기록합니다. 장치 목록과 이력 API는 모든 수집 경로의 이 측정 행을 조회합니다.
 
 - `UPSTASH_SYNC_ENABLED=false`: 직접 전송만 사용할 때 원격 동기화 중단
 - `RATE_LIMIT_STORE=memory`: Redis 없는 한 프로세스 로컬 개발용 요청 제한. 운영 기본값은 Redis

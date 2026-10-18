@@ -25,6 +25,9 @@ spring:
       password: ${SPRING_DATA_REDIS_PASSWORD:}
 
 iot:
+  device:
+    # 모든 ESP32가 공유하는 공통 기기 키(X-Device-Key). 비우면 등록된 MAC만 확인한다.
+    shared-key: ${IOT_SHARED_DEVICE_KEY:}
   upstash:
     enabled: ${UPSTASH_SYNC_ENABLED:true}
     redis-url: ${UPSTASH_REDIS_URL:${UPSTASH_REDIS_REST_URL:}}
