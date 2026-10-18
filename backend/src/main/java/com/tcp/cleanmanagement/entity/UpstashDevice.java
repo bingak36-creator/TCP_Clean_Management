@@ -20,5 +20,14 @@ public class UpstashDevice {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     private Sensor gasSensor;
 
+    @ManyToOne(fetch=FetchType.LAZY)
+    private Sensor mq7Sensor;
+
     private double lastScore;
+    public boolean currentBinding() {
+        return belongs(temperatureHumiditySensor)&&belongs(gasSensor)&&(mq7Sensor==null||belongs(mq7Sensor));
+    }
+    private boolean belongs(Sensor sensor) {
+        return sensor!=null&&(sensor.getDeviceSet()==null||macAddress.equalsIgnoreCase(sensor.getDeviceSet().getMacAddress()));
+    }
 }

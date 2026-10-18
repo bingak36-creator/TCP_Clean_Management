@@ -8,6 +8,15 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.List;
 public interface AlertRepository extends JpaRepository<Alert, Long> {
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT a FROM Alert a WHERE a.id=:id")
+    java.util.Optional<Alert> findByIdForUpdate(@Param("id") Long id);
+    boolean existsByDeviceSetHistoryDeviceSetId(Long deviceSetId);
+
+    boolean existsBySensorIdAndAlertTypeAndStatusAndDetectionSourceAndDeviceSetHistoryId(
+            Long sensorId, com.tcp.cleanmanagement.enums.AlertType type, AlertStatus status,
+            String detectionSource, Long historyId);
+    List<Alert> findBySensorIdAndAlertTypeAndDetectionSourceAndDeviceSetHistoryId(Long sensorId, com.tcp.cleanmanagement.enums.AlertType type,String source,Long historyId);
     List<Alert> findByStatus(AlertStatus status);
 
     @Modifying

@@ -6,7 +6,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "zone_permissions")
+@Table(name = "zone_permissions", uniqueConstraints=@UniqueConstraint(name="uq_user_zone",columnNames={"user_id","zone_id"}))
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class ZonePermission {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)

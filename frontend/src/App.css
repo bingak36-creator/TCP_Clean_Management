@@ -1575,6 +1575,144 @@
 .sensor-data-source { display: flex; flex-shrink: 0; align-items: center; gap: 6px; white-space: nowrap; }
 .sensor-data-source strong { border-radius: 4px; background: #0f172a; color: white; padding: 2px 6px; font-size: 10px; font-weight: 600; }
 .sensor-data-source span { color: #94a3b8; font-size: 10px; }
-.sensor-data-toolbar .sensor-data-error { color: #b91c1c; font-size: 11px; }
 /* 좁은 창에서는 헤더가 두 줄로 꺾이지 않도록 부가 정보(시스템 제목·갱신 시각)를 숨깁니다. */
 @media (max-width: 1000px) { .admin-header-optional { display: none; } }
+
+/* ==========================================================
+   AdminPage 반응형 레이아웃 & 컨테이너 쿼리 (Desktop / Tablet / Mobile)
+   ========================================================== */
+.admin-dashboard-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(310px, 350px);
+  gap: 16px;
+  align-items: start;
+}
+
+.admin-worker-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.worker-form-dual-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 560px) {
+  .worker-form-dual-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.admin-cleaning-split {
+  display: grid;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+/* 구역별 청소 현황 패널 - 컨테이너 쿼리 기반 반응형 */
+.cleaning-panel-card {
+  container-type: inline-size;
+}
+
+.cleaning-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.cleaning-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.cleaning-panel-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.cleaning-panel-item:hover {
+  border-color: #cbd5e1;
+  background-color: #f1f5f9;
+}
+
+.cleaning-panel-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cleaning-panel-item-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cleaning-worker-select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* 패널 폭이 넓을 때(420px 이상)는 1줄 가로 배치로 자동 전환 */
+@container (min-width: 420px) {
+  .cleaning-panel-item {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .cleaning-panel-item-top {
+    flex: 1;
+    min-width: 0;
+  }
+  .cleaning-panel-item-bottom {
+    flex-shrink: 0;
+    width: auto;
+  }
+  .cleaning-worker-select {
+    width: auto;
+    min-width: 150px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .admin-worker-grid,
+  .admin-cleaning-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1080px) {
+  .admin-dashboard-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .sensor-data-toolbar {
+    width: calc(100% - 20px);
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+}

@@ -18,6 +18,13 @@ class UpstashImportServiceTest {
     @Autowired SensorDataRawRepository rawRepository;
     @Autowired IotDataService iotDataService;
 
+    @org.junit.jupiter.api.BeforeEach
+    void setUp() {
+        for (String m : java.util.List.of("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03", "AA:BB:CC:DD:EE:04", "AA:BB:CC:DD:EE:05", "AA:BB:CC:DD:EE:06", "AA:BB:CC:DD:EE:07", "AA:BB:CC:DD:EE:08")) {
+            deviceRepository.deleteById(m);
+        }
+    }
+
     @Test
     void registersDeviceImportsAllMetricsAndDeduplicatesAfterReload() {
         String mac = "AA:BB:CC:DD:EE:01";
@@ -57,6 +64,20 @@ class UpstashImportServiceTest {
         assertThrows(RuntimeException.class, () -> service.importSample(mac, 1791783017, payload));
         assertEquals(before, rawRepository.count());
         assertEquals(0, service.checkpoint(mac));
+        assertTrue(sampleRepository.findByMacAddressAndSampleKey(mac, key(payload)).isEmpty());
+    }
+
+    @Test
+    void rejectedPacketIsClassifiedAndSkippingAdvancesOnlyTheCheckpoint() {
+        String mac = "AA:BB:CC:DD:EE:08";
+        long before = rawRepository.count();
+        String payload = payload(mac, true, "101", "293");
+        RuntimeException error = assertThrows(RuntimeException.class, () -> service.importSample(mac, 1791783017, payload));
+        assertTrue(UpstashImportService.isRejectedPacket(error));
+        assertFalse(UpstashImportService.isRejectedPacket(new IllegalStateException("database unavailable")));
+        service.skipRejectedSample(mac, 1791783017);
+        assertEquals(1791783017, service.checkpoint(mac));
+        assertEquals(before, rawRepository.count());
         assertTrue(sampleRepository.findByMacAddressAndSampleKey(mac, key(payload)).isEmpty());
     }
 

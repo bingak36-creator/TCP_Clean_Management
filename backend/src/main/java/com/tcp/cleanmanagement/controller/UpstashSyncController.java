@@ -15,6 +15,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class UpstashSyncController {
     private final UpstashSyncProperties properties;
+    private final com.tcp.cleanmanagement.security.AccessService access;
     private final UpstashSyncJob job;
     private final UpstashDeviceRepository deviceRepository;
     private final UpstashImportedSampleRepository sampleRepository;
@@ -22,6 +23,7 @@ public class UpstashSyncController {
     @GetMapping("/status")
     @Transactional(readOnly = true)
     public Status status() {
+        access.requireDeveloper();
         List<Device> devices = deviceRepository.findAll().stream()
                 .map(d -> new Device(d.getMacAddress(), d.getZone().getId(),
                         d.getTemperatureHumiditySensor().getId(), d.getGasSensor().getId(),

@@ -26,6 +26,7 @@ public class SensorDataRequest {
     private OffsetDateTime measuredAt;
 
     @NotEmpty
+    @jakarta.validation.constraints.Size(max=2)
     private List<@Valid Reading> readings;
 
     @Data

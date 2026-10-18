@@ -8,4 +8,5 @@ import java.util.Optional;
 
 public interface SensorMetricRepository extends JpaRepository<SensorMetric, Long> {
     Optional<SensorMetric> findBySensorIdAndMetricCode(Long sensorId, MetricCode metricCode);
+    java.util.List<SensorMetric> findBySensorId(Long id);
 }

@@ -40,9 +40,28 @@ class UpstashSyncJobTest {
         String mac = "AA:BB:CC:DD:EE:FF";
         when(reader.discoverDevices()).thenReturn(Set.of(mac));
         when(reader.readPage(mac, 0, 0)).thenReturn(List.of(ScoredValue.just(1, "bad"), ScoredValue.just(2, "next")));
-        when(importer.importSample(mac, 1, "bad")).thenThrow(new IllegalArgumentException());
+        when(importer.importSample(mac, 1, "bad")).thenThrow(new IllegalStateException("database unavailable"));
         job.sync();
         verify(importer, never()).importSample(mac, 2, "next");
+        verify(importer, never()).skipRejectedSample(anyString(), anyDouble());
+    }
+
+    @Test
+    void skipsRejectedPacketAndKeepsImportingLaterPackets() {
+        var properties = new UpstashSyncProperties();
+        properties.setRedisUrl("rediss://example.upstash.io:6379");
+        var reader = mock(UpstashHistoryReader.class);
+        var importer = mock(UpstashImportService.class);
+        var job = new UpstashSyncJob(properties, reader, importer);
+        String mac = "AA:BB:CC:DD:EE:FF";
+        when(reader.discoverDevices()).thenReturn(Set.of(mac));
+        when(reader.readPage(mac, 0, 0)).thenReturn(List.of(ScoredValue.just(1, "bad"), ScoredValue.just(2, "next")));
+        when(importer.importSample(mac, 1, "bad")).thenThrow(new IllegalArgumentException("Invalid MQ135 ADC value"));
+        when(importer.importSample(mac, 2, "next")).thenReturn(true);
+        job.sync();
+        verify(importer).skipRejectedSample(mac, 1);
+        verify(importer).importSample(mac, 2, "next");
+        org.junit.jupiter.api.Assertions.assertNull(job.getLastError());
     }
 
     @Test

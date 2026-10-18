@@ -35,3 +35,7 @@ out/
 
 ### VS Code ###
 .vscode/
+
+# AI runtime bytecode and local virtual environments
+ai/**/__pycache__/
+ai/.venv/

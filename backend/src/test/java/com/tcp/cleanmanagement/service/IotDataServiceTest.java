@@ -49,25 +49,16 @@ class IotDataServiceTest {
     @InjectMocks IotDataService service;
 
     @Test
-    void deviceConfigurationResolvesExistingActiveSensorTypesInsteadOfFixedIds() {
-        when(sensorRepository.findAll()).thenReturn(List.of(
-                Sensor.builder().id(50L).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build(),
-                Sensor.builder().id(2L).sensorType(SensorType.TEMP_HUMID).status(SensorStatus.ERROR).build(),
-                Sensor.builder().id(21L).sensorType(SensorType.TEMP_HUMID).status(SensorStatus.ACTIVE).build(),
-                Sensor.builder().id(40L).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build()));
-
-        var response = service.getDeviceSetByMac("AA:BB:CC:DD:EE:FF");
-
-        assertEquals("AA:BB:CC:DD:EE:FF", response.getMacAddress());
-        assertEquals(21L, response.getSensorIds().get("DHT11"));
-        assertEquals(21L, response.getSensorIds().get("DHT22"));
-        assertEquals(40L, response.getSensorIds().get("MQ135"));
-        assertEquals(50L, response.getSensorIds().get("MQ7"));
+    void unknownMacNeverBorrowsUnrelatedSensors() {
+        var error = assertThrows(ResponseStatusException.class,
+                () -> service.getDeviceSetByMac("AA:BB:CC:DD:EE:FF"));
+        assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+        verify(sensorRepository, never()).findAll();
     }
 
     @Test
     void splitsTemperatureAndHumidityAndConvertsDeviceTimeToUtc() {
-        Sensor sensor = Sensor.builder().id(5L).sensorType(SensorType.TEMP_HUMID).build();
+        Sensor sensor = Sensor.builder().id(5L).sensorType(SensorType.TEMP_HUMID).status(SensorStatus.ACTIVE).build();
         when(sensorRepository.findByIdForUpdate(5L)).thenReturn(Optional.of(sensor));
         when(metricRepository.findBySensorIdAndMetricCode(eq(5L), any())).thenReturn(Optional.empty());
         AtomicLong ids = new AtomicLong();
@@ -101,7 +92,7 @@ class IotDataServiceTest {
 
     @Test
     void identicalResendDoesNotInsertOrAnalyzeAgain() {
-        Sensor sensor = Sensor.builder().id(7L).sensorType(SensorType.GAS).build();
+        Sensor sensor = Sensor.builder().id(7L).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build();
         SensorMetric metric = SensorMetric.builder().id(10L).sensor(sensor).metricCode(MetricCode.GAS)
                 .unitCode("UNVERIFIED").build();
         when(sensorRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(sensor));
@@ -118,7 +109,7 @@ class IotDataServiceTest {
     @Test
     void rejectsMetricThatDoesNotBelongToSensorType() {
         when(sensorRepository.findByIdForUpdate(7L))
-                .thenReturn(Optional.of(Sensor.builder().id(7L).sensorType(SensorType.GAS).build()));
+                .thenReturn(Optional.of(Sensor.builder().id(7L).sensorType(SensorType.GAS).status(SensorStatus.ACTIVE).build()));
 
         ResponseStatusException error = assertThrows(ResponseStatusException.class,
                 () -> service.saveSensorData(7L, request("packet-3", null,

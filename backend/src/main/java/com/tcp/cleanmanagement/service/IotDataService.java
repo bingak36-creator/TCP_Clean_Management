@@ -9,7 +9,6 @@ import com.tcp.cleanmanagement.entity.SensorMetric;
 import com.tcp.cleanmanagement.entity.DeviceSetHistory;
 import com.tcp.cleanmanagement.enums.MetricCode;
 import com.tcp.cleanmanagement.enums.SensorModel;
-import com.tcp.cleanmanagement.enums.SensorStatus;
 import com.tcp.cleanmanagement.enums.SensorType;
 import com.tcp.cleanmanagement.enums.TimeSource;
 import com.tcp.cleanmanagement.event.SensorDataSavedEvent;
@@ -30,7 +29,6 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.HashSet;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -95,37 +93,20 @@ public class IotDataService {
                 ids.put("DHT11", device.getTemperatureHumiditySensor().getId());
                 ids.put("DHT22", device.getTemperatureHumiditySensor().getId());
                 ids.put("MQ135", device.getGasSensor().getId());
+                if(device.getMq7Sensor()!=null) ids.put("MQ7",device.getMq7Sensor().getId());
                 return DeviceSetResponse.builder().macAddress(device.getMacAddress())
                         .setCode("ESP32_" + device.getMacAddress().replace(":", ""))
                         .sensorIds(ids).build();
             }
         }
-        // The upstream demo uses one shared device set; resolve IDs by type so
-        // databases migrated from the metric-based schema remain compatible.
-        List<Sensor> sensors = sensorRepository.findAll().stream()
-                .filter(sensor -> sensor.getStatus() == SensorStatus.ACTIVE)
-                .sorted(Comparator.comparing(Sensor::getId))
-                .toList();
-        Map<String, Long> sensorMap = new HashMap<>();
-        sensors.stream().filter(sensor -> sensor.getSensorType() == SensorType.TEMP_HUMID)
-                .findFirst().ifPresent(sensor -> {
-                    sensorMap.put("DHT11", sensor.getId());
-                    sensorMap.put("DHT22", sensor.getId());
-                });
-        List<Sensor> gasSensors = sensors.stream()
-                .filter(sensor -> sensor.getSensorType() == SensorType.GAS).limit(2).toList();
-        if (!gasSensors.isEmpty()) sensorMap.put("MQ135", gasSensors.get(0).getId());
-        if (gasSensors.size() > 1) sensorMap.put("MQ7", gasSensors.get(1).getId());
-
-        return DeviceSetResponse.builder()
-                .macAddress(mac)
-                .setCode("ESP32_SET_01")
-                .sensorIds(sensorMap)
-                .build();
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Register this ESP32 MAC address first");
     }
 
     @Transactional
-    public void saveSensorData(Long sensorId, SensorDataRequest request) {
+    public void saveSensorData(Long sensorId, SensorDataRequest request) { saveSensorData(sensorId,request,"sensor_api"); }
+
+    @Transactional
+    public void saveSensorData(Long sensorId, SensorDataRequest request,String source) {
         Sensor sensor = sensorRepository.findByIdForUpdate(sensorId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Sensor not found"));
         if (request == null || request.getSampleKey() == null || request.getReadings() == null
@@ -146,6 +127,10 @@ public class IotDataService {
             }
         }
 
+        if(sensor.getStatus()!=com.tcp.cleanmanagement.enums.SensorStatus.ACTIVE || sensor.getZone()!=null && Boolean.FALSE.equals(sensor.getZone().getIsActive()))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"Sensor or zone is inactive");
+        if(request.getMeasuredAt()!=null && (request.getMeasuredAt().getYear()<1970 || request.getMeasuredAt().toInstant().isAfter(java.time.Instant.now().plusSeconds(300))))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Measurement time is in the future");
         Set<MetricCode> allowed = switch (sensor.getSensorType()) {
             case GAS -> Set.of(MetricCode.GAS);
             case TEMP_HUMID -> Set.of(MetricCode.TEMPERATURE, MetricCode.HUMIDITY);
@@ -157,6 +142,9 @@ public class IotDataService {
                     || !seen.add(reading.getMetricCode())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid or duplicate metric for sensor type");
             }
+            if ((reading.getMetricCode()==MetricCode.GAS && (reading.getMeasuredValue().signum()<0 || reading.getMeasuredValue().compareTo(BigDecimal.valueOf(4095))>0))
+                    || (reading.getMetricCode()==MetricCode.TEMPERATURE && (reading.getMeasuredValue().compareTo(BigDecimal.valueOf(-40))<0 || reading.getMeasuredValue().compareTo(BigDecimal.valueOf(80))>0)))
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Reading outside sensor range");
             if (reading.getMetricCode() == MetricCode.HUMIDITY
                     && (reading.getMeasuredValue().signum() < 0
                     || reading.getMeasuredValue().compareTo(BigDecimal.valueOf(100)) > 0)) {
@@ -169,12 +157,24 @@ public class IotDataService {
             }
         }
 
-        LocalDateTime receivedAt = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime receivedAt = databaseTime(LocalDateTime.now(ZoneOffset.UTC));
         LocalDateTime measuredAt = request.getMeasuredAt() == null
-                ? receivedAt : request.getMeasuredAt().withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
+                ? receivedAt : databaseTime(request.getMeasuredAt().withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime());
         TimeSource timeSource = request.getMeasuredAt() == null ? TimeSource.SERVER : TimeSource.DEVICE;
         DeviceSetHistory history = sensor.getDeviceSet() == null ? null : historyRepository
                 .findFirstByDeviceSetIdOrderByIdDesc(sensor.getDeviceSet().getId()).orElse(null);
+
+        if(sensor.getDeviceSet()!=null && request.getMeasuredAt()!=null) {
+            var installation=historyRepository.findByDeviceSetIdOrderByIdDesc(sensor.getDeviceSet().getId());
+            LocalDateTime currentSince=null;boolean previousBinding=false;
+            for(var item:installation) {
+                if(!item.getZone().getId().equals(sensor.getZone().getId()) ||
+                    !item.getMacAddress().equalsIgnoreCase(sensor.getDeviceSet().getMacAddress())) {previousBinding=true;break;}
+                currentSince=item.getChangedAt();
+            }
+            if(previousBinding && currentSince!=null && measuredAt.isBefore(currentSince.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)))
+                throw new ResponseStatusException(HttpStatus.CONFLICT,"Packet predates the current installation; retain it for historical recovery");
+        }
 
         for (SensorDataRequest.Reading reading : request.getReadings()) {
             MetricCode code = reading.getMetricCode();
@@ -198,6 +198,8 @@ public class IotDataService {
                     .metric(metric)
                     .deviceSetHistory(history)
                     .sampleKey(request.getSampleKey())
+                    .deviceMac(sensor.getDeviceSet()==null ? request.getMacAddress() : sensor.getDeviceSet().getMacAddress())
+                    .ingestSource(source)
                     .measuredValue(reading.getMeasuredValue())
                     .measuredAt(measuredAt)
                     .receivedAt(receivedAt)
@@ -205,6 +207,11 @@ public class IotDataService {
                     .build());
             eventPublisher.publishEvent(new SensorDataSavedEvent(saved.getId()));
         }
+    }
+
+    // DATETIME(6) stores microseconds; compare retries using the same precision before persistence.
+    private LocalDateTime databaseTime(LocalDateTime value) {
+        return value.plusNanos(500).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     }
 
     private String unitFor(MetricCode code) {

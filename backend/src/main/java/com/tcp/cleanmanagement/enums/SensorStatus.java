@@ -1,2 +1,2 @@
 package com.tcp.cleanmanagement.enums;
-public enum SensorStatus { ACTIVE, ERROR }
+public enum SensorStatus { ACTIVE, ERROR, INACTIVE }

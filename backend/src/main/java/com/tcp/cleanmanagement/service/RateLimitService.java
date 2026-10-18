@@ -14,6 +14,7 @@ public class RateLimitService {
     private final StringRedisTemplate redisTemplate;
     private final boolean memory;
     private final Clock clock;
+    @Value("${app.rate-limit.public-limit:10}") private int publicLimit=10;
     private final Map<String, Window> windows = new HashMap<>();
 
     @Autowired
@@ -37,7 +38,7 @@ public class RateLimitService {
             redisTemplate.expire(key, Duration.ofMinutes(1)); // 1분 제한
         }
         
-        return count != null && count <= 10; // 1분당 10회
+        return count != null && count <= publicLimit; // 1분당 10회
     }
 
     /** One-process development mode, preserving the existing 10 requests/minute limit. */
@@ -50,7 +51,7 @@ public class RateLimitService {
             window = new Window(now + 60000);
             windows.put(ipAddress, window);
         }
-        return ++window.count <= 10;
+        return ++window.count <= publicLimit;
     }
 
     private static class Window {

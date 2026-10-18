@@ -1,2 +1,2 @@
 package com.tcp.cleanmanagement.enums;
-public enum AlertType { SMOKING, FREEZE, WINDOW }
+public enum AlertType { SMOKING, FREEZE, WINDOW, LEAK }

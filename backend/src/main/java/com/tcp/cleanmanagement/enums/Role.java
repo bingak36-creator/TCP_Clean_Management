@@ -1,2 +1,2 @@
 package com.tcp.cleanmanagement.enums;
-public enum Role { DEVELOPER, ADMIN }
+public enum Role { DEVELOPER, ADMIN, CLEANER }

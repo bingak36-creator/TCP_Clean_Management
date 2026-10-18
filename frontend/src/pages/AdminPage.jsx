@@ -1,10 +1,53 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { buildRestroomsFromBackend, filterZoneRecords } from '../domain/monitoring';
+import { facilityPayload, SENSOR_TYPES } from '../domain/facility';
+import { emptyChecklist, createChecklistCoordinator, businessDate, applyCleaningRecord, completeCleaning, recordToLog } from '../domain/operations';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth, ROLES, ROLE_INFO } from '../auth/AuthContext';
-import { CustomOverlayMap } from 'react-kakao-maps-sdk';
+import { CustomOverlayMap, MapMarker } from 'react-kakao-maps-sdk';
 import Map from '../components/KakaoMapFrame';
+import { searchKakaoPlaces } from '../api/searchApi';
 import SensorDataStatus from '../components/SensorDataStatus';
 import { fetchSensorDevices, fetchSensorHistory, snapshotToRestroom, formatReading } from '../api/sensorApi';
+import {
+  fetchAdminZones,
+  saveZoneThresholdsApi,
+  createDispatchApi,
+  rotateDeviceKeyApi,
+  revokeDeviceKeyApi,
+  createBackendZone,
+  updateFacilityApi,
+  deleteBackendZone,
+  toggleZoneActiveApi,
+  fetchAdminAlertsApi,
+  resolveAlertApi,
+  resolveAllAlertsApi,
+  fetchCleaningRecordsApi,
+  createCleaningRecordApi,
+  fetchSensorsApi,
+  createBackendSensor,
+  updateBackendSensorApi,
+  deleteBackendSensorApi,
+  fetchDeviceSetsApi,
+  fetchDeviceSetHistoryApi,
+  createDeviceSetApi,
+  updateDeviceSetApi,
+  deleteDeviceSetApi,
+  fetchWorkersApi,
+  createWorkerApi,
+  deleteWorkerApi,
+  fetchSystemSettingsApi,
+  updateSystemSettingsApi,
+  fetchDailyChecklistApi,
+  toggleDailyChecklistApi,
+  batchUpdateDailyChecklistApi,
+  fetchUsersApi,
+  createUserApi,
+  updateUserApi,
+  deleteUserApi,
+  fetchUpstashStatusApi,
+  parseUtcDate, assignZoneWorkerApi, updateWorkerApi, updateWorkerStatusApi, fetchDiscoveredDevicesApi, dismissDiscoveredDeviceApi
+} from '../api/backendApi';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -44,6 +87,13 @@ const IconMap = () => (
     <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
     <line x1="8" y1="2" x2="8" y2="18" />
     <line x1="16" y1="6" x2="16" y2="22" />
+  </svg>
+);
+
+const IconMapPin = ({ size = 13, color = 'currentColor', style = {} }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+    <circle cx="12" cy="10" r="3" />
   </svg>
 );
 
@@ -325,227 +375,64 @@ const STATUS_STYLES = {
 };
 
 // 알 수 없는 상태값이 와도 화면이 깨지지 않도록 기본 스타일을 돌려줍니다.
-const statusStyle = (status) => STATUS_STYLES[status] || STATUS_STYLES.NORMAL;
+const statusStyle = (status) => STATUS_STYLES[status] || { ...STATUS_STYLES.OFFLINE, label: status === 'NO_DATA' ? '측정 없음' : status === 'INACTIVE' ? '운영 중지' : '상태 확인 필요' };
 
 // 서버는 수신 여부만 알려주므로, 실측 장치는 임계값을 넘는 값이 있을 때 주의·위험으로 바꿉니다.
-const withLiveStatus = (row, t) => {
-  if (!row.isActive || row.status === 'OFFLINE') return { ...row, status: 'OFFLINE' };
-  const over = (value, limit) => value != null && value >= limit;
-  if (over(row.temp, t.tempDanger) || over(row.humidity, t.humidDanger) || over(row.gas, t.gasDanger)) {
-    return { ...row, status: 'DANGER' };
-  }
-  if (over(row.temp, t.tempWarn) || over(row.humidity, t.humidWarn) || over(row.gas, t.gasWarn)) {
-    return { ...row, status: 'WARN' };
-  }
-  return { ...row, status: row.isLive ? 'RECEIVING' : 'NORMAL' };
+const withLiveStatus = (row) => {
+  if (row.isActive === false) return { ...row, status: 'INACTIVE' };
+  if (row.stale || row.status === 'STALE') return { ...row, status: 'OFFLINE' };
+  return row;
 };
+
+// 백엔드 MySQL DB의 Zone 목록과 실시간 센서 디바이스, 담당 청소관리인(Worker), 청소 이력을 매핑하는 헬퍼 함수
 
 // 서버 스냅샷으로 갱신하되, 화면에서 기록한 청소 정보와 화면에서 등록한 구역은 30초마다 지워지지 않게 합니다.
 // 주의: 이 파일은 지도 컴포넌트를 Map이라는 이름으로 가져오므로 내장 Map을 쓰지 않습니다.
 const mergeLiveRows = (previous, liveRows) => {
-  if (!liveRows || liveRows.length === 0) return previous;
+  if (!liveRows || liveRows.length === 0) return [];
   const liveIds = liveRows.map(r => r.id);
+  const isFromDb = liveRows.some(r => r.isFromDb);
+
   const merged = liveRows.map(row => {
     const old = previous.find(r => r.id === row.id);
-    return old ? { ...row, cleanWorker: old.cleanWorker, lastCleanedHours: old.lastCleanedHours } : row;
+    if (!old) return row;
+    const resolvedWorker = row.cleanWorker || '담당자 미지정';
+    const resolvedWorkerId = row.assignedWorkerId ?? null;
+    return {
+      ...row,
+      assignedWorkerId: resolvedWorkerId,
+      cleanWorker: resolvedWorker,
+      lastCleanedHours: row.lastCleanedHours ?? old.lastCleanedHours,
+      gender: old.gender || row.gender,
+      floor: old.floor || row.floor
+    };
   });
+
+  if (isFromDb) {
+    // DB 데이터가 있으면 이전의 더미 데이터는 제거하고 DB 데이터 기준으로 완전 교체
+    return merged;
+  }
   return [...merged, ...previous.filter(r => !r.isLive && !liveIds.includes(r.id))];
 };
 
-// 하드웨어 미연결 시에도 화장실1~4가 즉시 표시되도록 초기 관제 구역 데이터 구성
-const INITIAL_RESTROOMS = [
-  {
-    id: 1,
-    name: '1층 제1화장실 (남)',
-    floor: '1F',
-    gender: '남',
-    deviceId: 'ESP32-WC-1F-01',
-    macAddress: 'AA:BB:CC:DD:EE:01',
-    temp: 23.4,
-    humidity: 48.2,
-    gas: 215,
-    status: 'RECEIVING',
-    isActive: true,
-    isLive: true,
-    ingestSource: 'direct_api',
-    lastUpdated: '방금 전',
-    lastCleanedHours: 1.5,
-    cleanWorker: '김철수',
-    lat: 37.5668,
-    lng: 126.9785
-  },
-  {
-    id: 2,
-    name: '1층 제2화장실 (여)',
-    floor: '1F',
-    gender: '여',
-    deviceId: 'ESP32-WC-1F-02',
-    macAddress: 'AA:BB:CC:DD:EE:02',
-    temp: 24.1,
-    humidity: 52.0,
-    gas: 460,
-    status: 'WARN',
-    isActive: true,
-    isLive: true,
-    ingestSource: 'direct_api',
-    lastUpdated: '1분 전',
-    lastCleanedHours: 5.0,
-    cleanWorker: '이영희',
-    lat: 37.5665,
-    lng: 126.9789
-  },
-  {
-    id: 3,
-    name: '2층 제1화장실 (남)',
-    floor: '2F',
-    gender: '남',
-    deviceId: 'ESP32-WC-2F-01',
-    macAddress: 'AA:BB:CC:DD:EE:03',
-    temp: 29.2,
-    humidity: 74.5,
-    gas: 760,
-    status: 'DANGER',
-    isActive: true,
-    isLive: true,
-    ingestSource: 'direct_api',
-    lastUpdated: '방금 전',
-    lastCleanedHours: 8.5,
-    cleanWorker: '박영수',
-    lat: 37.5671,
-    lng: 126.9782
-  },
-  {
-    id: 4,
-    name: '2층 제2화장실 (여)',
-    floor: '2F',
-    gender: '여',
-    deviceId: 'ESP32-WC-2F-02',
-    macAddress: 'AA:BB:CC:DD:EE:04',
-    temp: 22.8,
-    humidity: 45.0,
-    gas: 185,
-    status: 'NORMAL',
-    isActive: true,
-    isLive: false,
-    ingestSource: 'mysql',
-    lastUpdated: '2분 전',
-    lastCleanedHours: 2.0,
-    cleanWorker: '최미정',
-    lat: 37.5663,
-    lng: 126.9778
-  }
-];
+// 초기 상태 (백엔드 MySQL DB로부터 실제 관제 데이터 로드)
+const INITIAL_RESTROOMS = [];
+const INITIAL_ALERTS = [];
+const INITIAL_CLEANING_LOGS = [];
+const INITIAL_PACKET_LOGS = [];
 
-const INITIAL_ALERTS = [
-  {
-    id: 101,
-    time: '14:15',
-    restroom: '2층 제1화장실 (남)',
-    metric: '악취 위험',
-    value: '760 ADC',
-    level: 'DANGER',
-    isChecked: false,
-    memo: 'MQ-135 암모니아/황화수소 위험 임계값(700) 초과 · 즉시 환기 및 물청소 요망'
-  },
-  {
-    id: 102,
-    time: '13:50',
-    restroom: '1층 제2화장실 (여)',
-    metric: '가스 주의',
-    value: '460 ADC',
-    level: 'WARN',
-    isChecked: false,
-    memo: 'MQ-135 주의 기준(400) 도달 · 방향제 및 환풍기 가동 상태 확인 요망'
-  },
-  {
-    id: 103,
-    time: '12:30',
-    restroom: '1층 제1화장실 (남)',
-    metric: '정기 점검',
-    value: '215 ADC',
-    level: 'NORMAL',
-    isChecked: true,
-    memo: '정오 정기 위생 점검 및 세면대 소독 완료'
-  }
-];
-
-const INITIAL_CLEANING_LOGS = [
-  {
-    id: 201,
-    time: '2026. 10. 16. 오후 12:30',
-    restroomName: '1층 제1화장실 (남)',
-    worker: '김철수 (환경미화 1팀)',
-    type: '정기 청소',
-    memo: '바닥 물청소, 변기 살균 세정 및 페이퍼타월 보충 완료'
-  },
-  {
-    id: 202,
-    time: '2026. 10. 16. 오전 11:40',
-    restroomName: '2층 제2화장실 (여)',
-    worker: '최미정 (환경미화 2팀)',
-    type: '위생 소독',
-    memo: '세면대 거울 클리닝 및 알코올 소독 완료'
-  },
-  {
-    id: 203,
-    time: '2026. 10. 16. 오전 09:00',
-    restroomName: '1층 제2화장실 (여)',
-    worker: '이영희 (환경미화 1팀)',
-    type: '비품 보충',
-    memo: '각 티슈 및 핸드워시 원액 보충 완료'
-  }
-];
-
-const INITIAL_PACKET_LOGS = INITIAL_RESTROOMS.map(r => ({
-  id: r.id,
-  time: new Date().toLocaleTimeString('ko-KR'),
-  deviceId: r.deviceId,
-  payload: `TEMP:${r.temp},HUM:${r.humidity},MQ135_ADC:${r.gas}`,
-  status: r.isActive ? 'OK' : 'FAIL'
-}));
-
-// MySQL 이력이 비어 있을 때도 시간 범위(1h/6h/24h/7d)에 맞춰 자연스러운 추이 그래프를 생성
-const buildFallbackHistoryPoints = (restroom, range) => {
-  const now = Date.now();
-  const hours = range === '7d' ? 168 : Number.parseInt(range, 10) || 1;
-  const count = 24;
-  const stepMs = (hours * 3600000) / count;
-  const baseTemp = Number(restroom?.temp) || 23.5;
-  const baseHum = Number(restroom?.humidity) || 50.0;
-  const baseGas = Number(restroom?.gas) || 240;
-  const baseMq7 = Number(restroom?.mq7) || 120;
-  const seed = Number(restroom?.id) || 1;
-
-  return Array.from({ length: count + 1 }, (_, idx) => {
-    const wave = Math.sin((idx + seed) * 0.55);
-    const cosWave = Math.cos((idx + seed) * 0.4);
-    return {
-      measuredAt: new Date(now - (count - idx) * stepMs).toISOString(),
-      temperatureC: Number((baseTemp + wave * 1.1).toFixed(1)),
-      humidityPercent: Number((baseHum + cosWave * 3.5).toFixed(1)),
-      mq135Adc: Math.max(80, Math.round(baseGas + wave * 42 + (idx === count ? 0 : cosWave * 18))),
-      mq7Adc: Math.max(40, Math.round(baseMq7 + wave * 25 + (idx === count ? 0 : cosWave * 12)))
-    };
-  });
-};
+// 측정 이력이 없을 때는 가짜 데이터를 생성하지 않고 빈 배열을 반환합니다.
+const buildFallbackHistoryPoints = () => [];
 
 const MONO_FONT = '"SF Mono", "Fira Code", Menlo, monospace';
 
-const genderLabel = (gender) => (gender === '공용' ? '공용' : `${gender}성용`);
+const genderLabel=gender=>gender==='공용'?'공용':gender==='남'?'남성용':gender==='여'?'여성용':'구분 미등록';
 
 // 출동 가능한 위생 미화 인원 명단
-const AVAILABLE_CLEANERS = [
-  { id: 'cleaner1', name: '이순신', team: '위생기동반', roleDesc: '긴급 출동 전담 (현장 기동)', status: '대기 중 (즉시 출동)', isAvailable: true, phone: '010-1234-5678' },
-  { id: 'cleaner2', name: '김철수', team: '환경미화 1팀', roleDesc: '1층 구역 전담 관리', status: '대기 중 (출동 가능)', isAvailable: true, phone: '010-2345-6789' },
-  { id: 'cleaner3', name: '이영희', team: '환경미화 1팀', roleDesc: '1층 여자/수유실 전담', status: '대기 중 (즉시 출동)', isAvailable: true, phone: '010-3456-7890' },
-  { id: 'cleaner4', name: '박영수', team: '환경미화 2팀', roleDesc: '2층 구역 전담 관리', status: '2층 현장 작업 중', isAvailable: false, phone: '010-4567-8901' },
-  { id: 'cleaner5', name: '최미정', team: '환경미화 2팀', roleDesc: '2층 여자/편의시설 전담', status: '대기 중 (즉시 출동)', isAvailable: true, phone: '010-5678-9012' },
-  { id: 'cleaner6', name: '정우성', team: '야간/특수기동', roleDesc: '악취·설비 긴급대응 전담', status: '대기 중 (즉시 출동)', isAvailable: true, phone: '010-6789-0123' }
-];
 
 export default function AdminPage() {
   const navigate = useNavigate();
-  const { user, logout, switchRole, canAccessZone, canViewTab, canAccessSettingSubTab } = useAuth();
+  const { user, logout, canAccessZone, canViewTab, canAccessSettingSubTab } = useAuth();
   const roleInfo = ROLE_INFO[user?.role] || ROLE_INFO.ADMIN;
 
   // 상단 탭 상태: 'dashboard', 'map', 'alerts', 'cleaning', 'settings'
@@ -563,10 +450,10 @@ export default function AdminPage() {
   const [rawRestrooms, setRestrooms] = useState(INITIAL_RESTROOMS);
   const [alerts, setAlerts] = useState(INITIAL_ALERTS);
   const [cleaningLogs, setCleaningLogs] = useState(INITIAL_CLEANING_LOGS);
-  const [selectedRestroom, setSelectedRestroom] = useState(INITIAL_RESTROOMS[0]);
-  const [dataLoading, setDataLoading] = useState(false);
+  const [selectedRestroom, setSelectedRestroom] = useState(null);
+  const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState('');
-  const [historyPoints, setHistoryPoints] = useState(() => buildFallbackHistoryPoints(INITIAL_RESTROOMS[0], '1h'));
+  const [historyPoints, setHistoryPoints] = useState([]);
   const [chartRange, setChartRange] = useState('1h');
   const [lastUpdatedTime, setLastUpdatedTime] = useState(new Date().toLocaleTimeString('ko-KR'));
 
@@ -577,7 +464,7 @@ export default function AdminPage() {
 
   // 청소 관리 페이지 전용 상태 (SCR-05)
   const [cleanFilterRestroom, setCleanFilterRestroom] = useState('ALL');
-  const [cleanFormRestroomId, setCleanFormRestroomId] = useState(INITIAL_RESTROOMS[0].id);
+  const [cleanFormRestroomId, setCleanFormRestroomId] = useState('');
   const [cleanFormWorker, setCleanFormWorker] = useState(user?.username === 'cleaner' ? '이순신 (위생미화)' : user?.username || '관리자');
   const [cleanFormType, setCleanFormType] = useState('정기 청소');
   const [cleanFormMemo, setCleanFormMemo] = useState('');
@@ -585,31 +472,110 @@ export default function AdminPage() {
   // 설정 페이지 전용 서브탭 및 상태 (SCR-06)
   const [settingsSubTab, setSettingsSubTab] = useState('thresholds'); // 'thresholds', 'restrooms', 'system'
   const [thresholdScope, setThresholdScope] = useState('ALL'); // 'ALL' 또는 restroomId
-  const [thresholds, setThresholds] = useState({
-    tempWarn: 28,
-    tempDanger: 32,
-    humidWarn: 65,
-    humidDanger: 80,
-    gasWarn: 400,
-    gasDanger: 700
-  });
-  const [systemSettings, setSystemSettings] = useState({
-    offlineSeconds: 60,
-    refreshSeconds: 5,
-    cleanWarnHours: 8,
-    retentionDays: 30,
-    deviceKey: 'TCP-SEC-2026-DEV-KEY-9842'
-  });
+  const [thresholds, setThresholds] = useState({tempWarn:28,tempDanger:35,humidWarn:70,humidDanger:85,gasWarn:400,gasDanger:700});
+  const [systemSettings, setSystemSettings] = useState({offlineSeconds:90,refreshSeconds:30,cleanWarnHours:4});
+  const [appliedSettings, setAppliedSettings] = useState({offlineSeconds:90,refreshSeconds:30,cleanWarnHours:4});
+  const [issuedCredential, setIssuedCredential] = useState(null);
+  const checklistScope = useRef(createChecklistCoordinator());
+  const checklistDay = businessDate();
+  const [upstashStatus, setUpstashStatus] = useState(null);
+  const [deviceSets, setDeviceSets] = useState([]);
+
+  // 미화원(청소관리인) 인원 DB 상태 및 등록/배정 모달 상태
+  const [workers, setWorkers] = useState([]);
+  const [isWorkerModalOpen, setIsWorkerModalOpen] = useState(false);
+  const [editingWorkerId, setEditingWorkerId] = useState(null);
+  const [workerFormName, setWorkerFormName] = useState('');
+  const [workerFormPhone, setWorkerFormPhone] = useState('');
+  const [workerFormRole, setWorkerFormRole] = useState('환경미화 1팀 (주간 전담)');
+  const [workerFormStatus, setWorkerFormStatus] = useState('AVAILABLE');
+  const [workerFormZoneId, setWorkerFormZoneId] = useState('');
+
+  const cleanersList = useMemo(() => {
+    if (workers && workers.length > 0) {
+      return workers.map(w => ({
+        id: String(w.id),
+        name: w.name,
+        team: w.role || '위생기동반',
+        roleDesc: w.role || '현장 점검 관리',
+        assignedZoneId: w.assignedZoneId ?? null,
+        status: w.status === 'AVAILABLE' ? '대기 중 (즉시 출동)' : w.status === 'DISPATCHED' ? '현장 작업 중' : '휴무',
+        rawStatus: w.status || 'AVAILABLE',
+        isAvailable: w.status === 'AVAILABLE',
+        phone: w.phone
+      }));
+    }
+    return [];
+  }, [workers]);
 
   // 임계값을 바꾸면 실측 장치의 상태도 바로 다시 계산합니다.
   const restrooms = useMemo(() => rawRestrooms.map(r => withLiveStatus(r, thresholds)), [rawRestrooms, thresholds]);
 
-  // 화장실 등록 모달 상태 (설정 탭 내)
+  // 구역 신규 등록 모달 (POST /api/dev/zones 및 /api/admin/zones)
+  const [isAddZoneModalOpen, setIsAddZoneModalOpen] = useState(false);
+  const [newZoneName, setNewZoneName] = useState('');
+  const [newZoneFloor, setNewZoneFloor] = useState('1F');
+  const [newZoneAddress, setNewZoneAddress] = useState('');
+  const [newZoneLat, setNewZoneLat] = useState('');
+  const [newZoneLng, setNewZoneLng] = useState('');
+  const [newZoneType, setNewZoneType] = useState('TOILET');
+
+  // 구역(화장실) 정보 수정 모달 (PUT /api/dev/zones/{id})
+  const [isEditZoneModalOpen, setIsEditZoneModalOpen] = useState(false);
+  const [editingZone, setEditingZone] = useState(null);
+
+  // 기기 세트 수정 모달 (PATCH /api/admin/device-sets/{id})
+  const [isEditDeviceSetModalOpen, setIsEditDeviceSetModalOpen] = useState(false);
+  const [editingDeviceSet, setEditingDeviceSet] = useState(null);
+
+  // 센서 단독 추가 및 개별 센서 목록 관리 (GET/POST/PATCH/DELETE /api/dev/sensors)
+  const [sensorsList, setSensorsList] = useState([]);
+  const [isAddSensorModalOpen, setIsAddSensorModalOpen] = useState(false);
+  const [newSensorData, setNewSensorData] = useState({
+    zoneId: '',
+    sensorType: 'TEMP_HUMID'
+  });
+
+  // 시스템 계정 및 구역 권한 관리 상태 (GET/POST/PUT/DELETE /api/admin/users)
+  const [usersList, setUsersList] = useState([]);
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [userForm, setUserForm] = useState({
+    username: '',
+    password: '',
+    role: 'CLEANER',
+    zoneIds: []
+  });
+
+  // 기기 세트 변경 이력 모달 (GET /api/admin/device-sets/{id}/history)
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [deviceSetHistories, setDeviceSetHistories] = useState([]);
+  const [historyDeviceSetTitle, setHistoryDeviceSetTitle] = useState('');
+
+  // 화장실/신규 노드 등록 모달 상태 (개발자 대시보드 및 설정 탭 내)
   const [isAddRestroomModalOpen, setIsAddRestroomModalOpen] = useState(false);
   const [newRestroomName, setNewRestroomName] = useState('');
   const [newRestroomFloor, setNewRestroomFloor] = useState('1F');
   const [newRestroomGender, setNewRestroomGender] = useState('남');
   const [newRestroomDeviceId, setNewRestroomDeviceId] = useState('');
+  const [newRestroomLat, setNewRestroomLat] = useState('');
+  const [newRestroomLng, setNewRestroomLng] = useState('');
+  const [newRestroomWorkerId, setNewRestroomWorkerId] = useState('');
+  const [isGpsLocating, setIsGpsLocating] = useState(false);
+  const [gpsStatusMsg, setGpsStatusMsg] = useState('');
+
+  // 관리자 전용 미등록 IoT 기기 감지 대기 목록
+  const [discoveredDevices, setDiscoveredDevices] = useState([]);
+
+  // 웹 지도 핀 찍기 및 주소 검색 위치 선택기 상태 (Location Picker)
+  const [isLocationPickerOpen, setIsLocationPickerOpen] = useState(false);
+  const [locationPickerTarget, setLocationPickerTarget] = useState('restroom'); // 'restroom' | 'zone' | 'editZone'
+  const [pickerLat, setPickerLat] = useState(37.566826);
+  const [pickerLng, setPickerLng] = useState(126.978656);
+  const [pickerMapCenter, setPickerMapCenter] = useState({ lat: 37.566826, lng: 126.978656 });
+  const [pickerSearchKeyword, setPickerSearchKeyword] = useState('');
+  const [pickerSearchResults, setPickerSearchResults] = useState([]);
+  const [pickerAddress, setPickerAddress] = useState('');
+  const [isSearchingPlaces, setIsSearchingPlaces] = useState(false);
 
   // 대시보드 퀵 청소 모달 & 토스트
   const [isCleaningModalOpen, setIsCleaningModalOpen] = useState(false);
@@ -626,91 +592,69 @@ export default function AdminPage() {
   // 관리자 전용 긴급 출동 지시 팝업 모달 상태
   const [isDispatchModalOpen, setIsDispatchModalOpen] = useState(false);
   const [dispatchTargetId, setDispatchTargetId] = useState('ALL_DELAYED'); // 'ALL_DELAYED', 'ALL_ACCESSIBLE', or restroom ID
-  const [selectedCleanerIds, setSelectedCleanerIds] = useState(['cleaner1']);
+  const [selectedCleanerIds, setSelectedCleanerIds] = useState([]);
   const [dispatchType, setDispatchType] = useState('긴급 바닥 청소 및 살균 소독');
   const [dispatchUrgency, setDispatchUrgency] = useState('EMERGENCY'); // 'EMERGENCY', 'NORMAL', 'ROUTINE'
   const [dispatchMemo, setDispatchMemo] = useState('청소 기준 시간 초과 구역 현장 점검 및 즉시 소독 조치 요망');
 
 
   // 청소 담당자 체크리스트 상태
-  const [cleanChecklist, setCleanChecklist] = useState({
-    floor: false,
-    sink: false,
-    toilet: false,
-    soap: false,
-    trash: false,
-    vent: false
-  });
+  const [cleanChecklist, setCleanChecklist] = useState(emptyChecklist);
 
-  const toggleChecklistItem = (key) => {
-    const next = { ...cleanChecklist, [key]: !cleanChecklist[key] };
-    const checkedCount = Object.values(next).filter(Boolean).length;
-    setCleanChecklist(next);
-    showToast(`위생 점검 체크리스트: ${checkedCount}/6 항목 완료`);
+  const toggleChecklistItem = async (key) => {
+    const zoneId=Number(cleanFormRestroomId||selectedRestroom?.id);
+    if(!zoneId){showToast('구역을 선택해주세요.');return;}
+    const scope=String(zoneId)+':'+checklistDay;
+    try {
+      const saved=await checklistScope.current.write(scope,
+        ()=>toggleDailyChecklistApi({zoneId,date:checklistDay,itemKey:key,isCompleted:!cleanChecklist[key]}),
+        row=>setCleanChecklist(prev=>({...prev,[key]:row.completed??row.isCompleted??false})));
+      showToast(saved?'체크리스트가 저장되었습니다.':'현재 체크리스트 처리 중입니다.');
+    }catch(error){showToast('체크리스트 저장 실패: '+error.message);}
+  };
+
+  const saveConfirmedCleaning = async (target, worker, type, memo) => {
+    if (!target) throw new Error('구역을 선택해주세요.');
+    return completeCleaning({save:createCleaningRecordApi,request:{zoneId:target.id,restroomName:target.name,worker,type,memo},
+      commit:(log,zoneId)=>{
+        setCleaningLogs(prev=>[log,...prev.filter(old=>old.id!==log.id)]);
+        setRestrooms(prev=>prev.map(row=>row.id===zoneId?applyCleaningRecord(row,log.worker):row));
+      }});
+  };
+
+  // 체크리스트 전체 체크 / 초기화 일괄 DB 동기화 (F09, F17)
+  const handleBatchToggleChecklist = async (nextState=true) => {
+    const zoneId=Number(cleanFormRestroomId||selectedRestroom?.id);
+    if(!zoneId){showToast('구역을 선택해주세요.');return;}
+    const scope=String(zoneId)+':'+checklistDay;
+    const next=Object.fromEntries(Object.keys(emptyChecklist()).map(key=>[key,nextState]));
+    try {
+      const saved=await checklistScope.current.write(scope,
+        ()=>batchUpdateDailyChecklistApi({zoneId,date:checklistDay,items:next}),
+        ()=>setCleanChecklist(next));
+      showToast(saved?'체크리스트가 저장되었습니다.':'현재 체크리스트 처리 중입니다.');
+    }catch(error){showToast('체크리스트 저장 실패: '+error.message);}
   };
 
   // 청소 담당자 체크리스트 일괄 제출
-  const handleSubmitChecklist = () => {
-    const checkedEntries = [
-      { key: 'floor', label: '바닥 물청소·건조' },
-      { key: 'sink', label: '세면대·거울 소독' },
-      { key: 'toilet', label: '변기 살균 세정' },
-      { key: 'soap', label: '휴지·비누·소독제 보충' },
-      { key: 'trash', label: '쓰레기통 비움·봉투 교체' },
-      { key: 'vent', label: '환풍기·방향제 점검' }
-    ].filter(item => cleanChecklist[item.key]);
-
-    if (checkedEntries.length === 0) {
-      showToast('최소 1개 이상의 점검 항목을 체크해주세요.');
-      return;
-    }
-
-    const targetR = selectedRestroom || restrooms[0];
-    const workerName = user?.username === 'cleaner' ? '이순신 (위생미화팀)' : (user?.username || '담당자');
-    const newLog = {
-      id: Date.now(),
-      time: new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-      restroomName: targetR ? targetR.name : '담당 구역 전체',
-      worker: workerName,
-      type: `일일 위생 점검 (${checkedEntries.length}/6)`,
-      memo: `점검 완료: ${checkedEntries.map(i => i.label).join(', ')}`
-    };
-    setCleaningLogs(prev => [newLog, ...prev]);
-    if (targetR) {
-      setRestrooms(prev => prev.map(r => r.id === targetR.id ? { ...r, lastCleanedHours: 0, cleanWorker: workerName } : r));
-    }
-    setCleanChecklist({ floor: false, sink: false, toilet: false, soap: false, trash: false, vent: false });
-    showToast(`오늘의 위생 점검표(${checkedEntries.length}개 항목)가 청소 이력에 등록되었습니다.`);
+  const handleSubmitChecklist = async () => {
+    const count=Object.values(cleanChecklist).filter(Boolean).length;
+    if (!count) {showToast('최소 한 항목을 점검해주세요.');return;}
+    const zoneId=Number(cleanFormRestroomId || selectedRestroom?.id);
+    const target=restrooms.find(row=>row.id===zoneId);
+    try {
+      await saveConfirmedCleaning(target,user.username,`일일 위생 점검 (${count}/6)`,`점검 완료: ${Object.entries(cleanChecklist).filter(([,done])=>done).map(([key])=>key).join(', ')}`);
+      showToast('위생 점검 기록이 저장되었습니다.');
+    } catch(error){showToast(`위생 점검 기록 저장 실패: ${error.message}`);}
   };
 
   // 개발자 패킷 스트림 로그 상태
   const [packetLogs, setPacketLogs] = useState(INITIAL_PACKET_LOGS);
 
   // 청소 담당자 원클릭 즉시 청소 처리
-  const handleQuickActionClean = (item, type, memo) => {
-    setRestrooms(prev => prev.map(r => {
-      if (r.id === item.id) {
-        return {
-          ...r,
-          lastCleanedHours: 0,
-          cleanWorker: user?.username === 'cleaner' ? '이순신 (위생미화팀)' : (user?.username || '담당자'),
-          gas: Math.min(r.gas ?? 210, 210),
-          status: 'NORMAL'
-        };
-      }
-      return r;
-    }));
-
-    const newLog = {
-      id: Date.now(),
-      time: new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-      restroomName: item.name,
-      worker: user?.username === 'cleaner' ? '이순신 (위생미화팀)' : (user?.username || '담당자'),
-      type: type,
-      memo: memo
-    };
-    setCleaningLogs(prev => [newLog, ...prev]);
-    showToast(`[${item.name}] ${type} 완료 처리되었습니다.`);
+  const handleQuickActionClean = async (item,type,memo) => {
+    try {await saveConfirmedCleaning(item,user.username,type,memo);showToast(`[${item.name}] 청소 기록이 저장되었습니다.`);}
+    catch(error){showToast(`청소 기록 저장 실패: ${error.message}`);}
   };
 
   // 개발자 전용: 전체 데이터 조회 확인 및 핑 테스트
@@ -741,75 +685,56 @@ export default function AdminPage() {
     }
   };
 
-  // 개발자 전용: 모의 패킷 수신 시뮬레이션
-  const handleSimulatePacket = () => {
-    const target = selectedRestroom || restrooms[0];
-    if (!target) return;
-    const nextTemp = Number((22 + Math.random() * 8).toFixed(1));
-    const nextHum = Number((45 + Math.random() * 30).toFixed(1));
-    const nextGas = Math.round(180 + Math.random() * 580);
-    const nextMq7 = Math.round(70 + Math.random() * 200);
-    const nowStr = new Date().toLocaleTimeString('ko-KR');
+  // DB 알림 및 청소 기록을 프론트엔드 상태에 병합하는 헬퍼 (F19)
+  const syncAlertsFromDb = (dbAlerts) => {
+    if (!dbAlerts || !Array.isArray(dbAlerts)) return;
+    const mapped = dbAlerts.map(a => ({
+      id: a.alertId,
+      zoneId:a.zoneId,
+      time: a.createdAt ? parseUtcDate(a.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '최근',
+      restroom: a.zoneName || '관제 구역',
+      metric: a.alertType || '임계 감지',
+      value: a.installationLabel || '현장 점검 필요',
+      level: (a.alertType && (a.alertType.includes('DANGER') || a.alertType.includes('위험'))) ? 'DANGER' : 'WARN',
+      isChecked: a.status === 'RESOLVED',
+      memo: a.message
+    }));
+    setAlerts(prev => {
+      const ids = new Set(mapped.map(m => m.id));
+      return [...mapped, ...prev.filter(p => !ids.has(p.id) && p.id > 1000000000000)];
+    });
+  };
 
-    setRestrooms(prev => prev.map(r => r.id === target.id ? {
-      ...r,
-      temp: nextTemp,
-      humidity: nextHum,
-      gas: nextGas,
-      mq7: nextMq7,
-      isActive: true,
-      lastUpdated: nowStr
-    } : r));
-
-    setPacketLogs(prev => [{
-      id: Date.now(),
-      time: nowStr,
-      deviceId: target.deviceId,
-      payload: `TEMP:${nextTemp},HUM:${nextHum},MQ135:${nextGas},MQ7:${nextMq7}`,
-      status: 'OK'
-    }, ...prev].slice(0, 20));
-
-    setHistoryPoints(prev => [
-      ...prev.slice(-23),
-      { measuredAt: new Date().toISOString(), temperatureC: nextTemp, humidityPercent: nextHum, mq135Adc: nextGas, mq7Adc: nextMq7 }
-    ]);
-
-    if (nextGas >= thresholds.gasWarn || nextTemp >= thresholds.tempWarn || nextHum >= thresholds.humidWarn) {
-      const isDanger = nextGas >= thresholds.gasDanger || nextTemp >= thresholds.tempDanger || nextHum >= thresholds.humidDanger;
-      setAlerts(prev => [{
-        id: Date.now() + 1,
-        time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
-        restroom: target.name,
-        metric: isDanger ? '임계 위험' : '임계 주의',
-        value: `${nextGas} ADC / ${nextTemp}℃`,
-        level: isDanger ? 'DANGER' : 'WARN',
-        isChecked: false,
-        memo: `실시간 패킷 수신 임계치 감지 (TEMP:${nextTemp}℃, HUM:${nextHum}%, MQ135:${nextGas} ADC, MQ7:${nextMq7} ADC)`
-      }, ...prev]);
-    }
-    setLastUpdatedTime(nowStr);
-    showToast(`[${target.name}] 실시간 센서 패킷 수신 완료 (MQ-135: ${nextGas}, MQ-7: ${nextMq7})`);
+  const syncCleaningLogsFromDb = (dbRecords) => {
+    if (!dbRecords || !Array.isArray(dbRecords)) return;
+    const mappedLogs = dbRecords.map(r => ({
+      id: r.id,
+      zoneId: r.zoneId,
+      createdAt: r.createdAt,
+      time: r.createdAt ? parseUtcDate(r.createdAt).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '최근',
+      restroomName: r.restroomName,
+      worker: r.worker,
+      type: r.type,
+      memo: r.memo
+    }));
+    setCleaningLogs(prev => {
+      const ids = new Set(mappedLogs.map(m => m.id));
+      return [...mappedLogs, ...prev.filter(p => !ids.has(p.id) && p.id > 1000000000000)];
+    });
   };
 
   // 수동 새로고침 핸들러
   const handleManualRefresh = async () => {
     setDataLoading(true);
     try {
-      const devices = await fetchSensorDevices();
-      if (devices.length > 0) {
-        const rows = devices.map((d, idx) => snapshotToRestroom(d, idx));
-        setRestrooms(prev => mergeLiveRows(prev, rows));
-      }
-      setLastUpdatedTime(new Date().toLocaleTimeString('ko-KR'));
-      showToast('최신 관제 데이터를 갱신했습니다.');
-    } catch (err) {
-      showToast('로컬 관제 데이터를 유지합니다.');
-    } finally {
-      setDataLoading(false);
-    }
+      const [zones,devices]=await Promise.all([fetchAdminZones(),fetchSensorDevices()]);
+      setRestrooms(prev=>mergeLiveRows(prev,buildRestroomsFromBackend(zones,devices)));
+      setDataError('');setLastUpdatedTime(new Date().toLocaleTimeString('ko-KR'));showToast('최신 관제 데이터를 갱신했습니다.');
+    } catch(error){setDataError(`최신 데이터 조회 실패: ${error.message}`);showToast('갱신에 실패했습니다. 마지막으로 확인한 데이터를 표시합니다.');}
+    finally{setDataLoading(false);}
   };
 
-  // MySQL에 저장된 실측값이 있으면 병합하고, 없으면 기본 관제 구역을 유지합니다.
+  // MySQL에 저장된 실측값, 관제 구역, 알림, 청소 이력을 병합하고 설정된 주기(refreshSeconds)마다 자동 갱신합니다. (F11, F19)
   useEffect(() => {
     const controller = new AbortController();
     let pending = false;
@@ -818,13 +743,32 @@ export default function AdminPage() {
       if (pending) return;
       pending = true;
       try {
-        const devices = await fetchSensorDevices(controller.signal);
+        const [zones, devices, settings, latestWorkers, dbAlerts, dbRecords] = await Promise.all([
+          fetchAdminZones(controller.signal),fetchSensorDevices(controller.signal),fetchSystemSettingsApi(),
+          fetchWorkersApi(),fetchAdminAlertsApi('ALL'),fetchCleaningRecordsApi()
+        ]);
+        const applied={offlineSeconds:Number(settings.offline_timeout_seconds),refreshSeconds:Number(settings.polling_interval_seconds),cleanWarnHours:Number(settings.clean_warning_interval_hours)};
+        if(!controller.signal.aborted)setAppliedSettings(prev=>Object.keys(applied).every(key=>prev[key]===applied[key])?prev:applied);
         if (controller.signal.aborted) return;
-        if (devices.length > 0) {
-          const rows = devices.map((d, idx) => snapshotToRestroom(d, idx));
+
+        if (latestWorkers) {
+          setWorkers(latestWorkers);
+        }
+        if (dbAlerts) syncAlertsFromDb(dbAlerts);
+        if (dbRecords) syncCleaningLogsFromDb(dbRecords);
+
+        let rows = [];
+        if (zones && zones.length > 0) {
+          rows = buildRestroomsFromBackend(zones, devices, latestWorkers || [], dbRecords || []);
+        } else if (devices && devices.length > 0) {
+          rows = devices.map((d, idx) => snapshotToRestroom(d, idx));
+        }
+
+        if (rows.length === 0) setRestrooms([]);
+        if (rows.length > 0) {
           setRestrooms(prev => mergeLiveRows(prev, rows));
           setCleanFormRestroomId(previous => rows.some(row => row.id === Number(previous)) ? previous : (rows[0]?.id || 1));
-          setPacketLogs(rows.map(row => ({
+          setPacketLogs(rows.filter(row=>row.measuredAt).map(row => ({
             id: row.id,
             time: row.lastUpdated,
             deviceId: row.deviceId,
@@ -842,9 +786,107 @@ export default function AdminPage() {
       }
     };
     refresh();
-    const timer = setInterval(refresh, 30000);
+    const timer = setInterval(refresh, appliedSettings.refreshSeconds * 1000);
     return () => { controller.abort(); clearInterval(timer); };
+  }, [appliedSettings.refreshSeconds]);
+
+  useEffect(() => {
+    setRestrooms(prev => prev.map(row => {
+      const worker=workers.find(w=>Number(w.assignedZoneId)===Number(row.id));
+      return {...row,assignedWorkerId:worker?.id ?? null,cleanWorker:worker?.name || '담당자 미지정'};
+    }));
+  }, [workers]);
+
+  const handleAssignWorkerToZone = async (zoneId, workerIdVal) => {
+    try {
+      await assignZoneWorkerApi(zoneId,workerIdVal ? Number(workerIdVal) : null);
+      const [zones,devices,latestWorkers]=await Promise.all([fetchAdminZones(),fetchSensorDevices(),fetchWorkersApi()]);
+      setRestrooms(prev=>mergeLiveRows(prev,buildRestroomsFromBackend(zones,devices)));
+      setWorkers(latestWorkers);
+      showToast('담당자 지정이 저장되었습니다.');
+    } catch(error) {showToast(error.message);}
+  };
+
+  // 청소관리인 삭제 핸들러 (DELETE /api/admin/workers/{id})
+  const handleDeleteWorker = async (worker) => {
+    if (!window.confirm(`청소관리인 [${worker.name}]님을 명단에서 삭제하시겠습니까?`)) return;
+    try {
+      setDataLoading(true);
+      await deleteWorkerApi(worker.id);
+      setWorkers(prev => prev.filter(w => Number(w.id) !== Number(worker.id)));
+      setRestrooms(prev => prev.map(r => (
+        Number(r.assignedWorkerId) === Number(worker.id) || r.cleanWorker === worker.name
+          ? { ...r, assignedWorkerId: null, cleanWorker: '담당자 미지정' }
+          : r
+      )));
+      if (editingWorkerId === worker.id) {
+        handleResetWorkerForm();
+      }
+      showToast(`청소관리인 [${worker.name}]님이 삭제되었습니다.`);
+    } catch (err) {
+      showToast(`삭제 실패: ${err.message}`);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  // MySQL DB에 저장된 실제 알림, 청소 이력, 미화원, 설정, 기기세트, 센서, 계정을 불러옵니다.
+  useEffect(() => {
+    fetchAdminAlertsApi('ALL').then(syncAlertsFromDb).catch(console.warn);
+    fetchCleaningRecordsApi().then(syncCleaningLogsFromDb).catch(console.warn);
+
+    fetchWorkersApi().then(setWorkers).catch(error=>setDataError(error.message));
+    // 중앙 시스템 설정 및 온습도·가스 임계값 조회 (F10, F11)
+    fetchSystemSettingsApi().then(settingsData => {
+      if (settingsData) {
+        setSystemSettings(prev => ({
+          ...prev,
+          offlineSeconds: Number(settingsData.offline_timeout_seconds || prev.offlineSeconds),
+          refreshSeconds: Number(settingsData.polling_interval_seconds || prev.refreshSeconds),
+          cleanWarnHours: Number(settingsData.clean_warning_interval_hours || prev.cleanWarnHours)
+        }));
+        setThresholds(prev => ({
+          ...prev,
+          tempWarn: Number(settingsData.temp_warning_threshold || prev.tempWarn),
+          tempDanger: Number(settingsData.temp_danger_threshold || prev.tempDanger),
+          humidWarn: Number(settingsData.humidity_warning_threshold || prev.humidWarn),
+          humidDanger: Number(settingsData.humidity_danger_threshold || prev.humidDanger),
+          gasWarn: Number(settingsData.gas_warning_threshold || prev.gasWarn),
+          gasDanger: Number(settingsData.gas_danger_threshold || prev.gasDanger)
+        }));
+      }
+    }).catch(error=>setDataError(`데이터 처리 실패: ${error.message}`));
+
+    fetchSystemSettingsApi().then(data=>{
+      setAppliedSettings({offlineSeconds:Number(data.offline_timeout_seconds),refreshSeconds:Number(data.polling_interval_seconds),cleanWarnHours:Number(data.clean_warning_interval_hours)});
+      setThresholds({tempWarn:Number(data.temp_warning_threshold),tempDanger:Number(data.temp_danger_threshold),humidWarn:Number(data.humidity_warning_threshold),humidDanger:Number(data.humidity_danger_threshold),gasWarn:Number(data.gas_warning_threshold),gasDanger:Number(data.gas_danger_threshold)});
+    }).catch(error=>setDataError(`운영 설정 조회 실패: ${error.message}`));
+
+    if(user.role===ROLES.DEVELOPER) {
+      Promise.all([fetchSensorsApi(),fetchUsersApi(),fetchDiscoveredDevicesApi()]).then(([sensors,users,discovered])=>{
+        setSensorsList(sensors);setUsersList(users);setDiscoveredDevices(discovered);
+      }).catch(error=>setDataError(error.message));
+    }
+    // 기기 세트 목록 조회
+    fetchDeviceSetsApi().then(setDeviceSets).catch(error=>setDataError(`데이터 처리 실패: ${error.message}`));
   }, []);
+
+  useEffect(() => {
+    const zoneId=Number(cleanFormRestroomId || selectedRestroom?.id);
+    const scope=`${zoneId}:${checklistDay}`;
+    const coordinator=checklistScope.current;
+    coordinator.load(scope,()=>zoneId?fetchDailyChecklistApi(zoneId,checklistDay):Promise.resolve([]),setCleanChecklist)
+      .catch(error=>{if(coordinator.isCurrent(scope))setDataError(`체크리스트 조회 실패: ${error.message}`);});
+    return()=>coordinator.cancel(scope);
+  },[cleanFormRestroomId,selectedRestroom?.id,checklistDay]);
+
+  // 설정 서브탭 진입 시 클라우드 Upstash 상태, 기기 세트, 개별 센서, 계정 목록 로드
+  useEffect(() => {
+    if (activeTab === 'settings' && settingsSubTab === 'system') {
+      fetchUpstashStatusApi().then(setUpstashStatus).catch(error=>setDataError(`데이터 처리 실패: ${error.message}`));
+      fetchDeviceSetsApi().then(setDeviceSets).catch(error=>setDataError(`데이터 처리 실패: ${error.message}`));
+    }
+  }, [activeTab, settingsSubTab]);
 
   useEffect(() => {
     const mac = selectedRestroom?.macAddress;
@@ -865,14 +907,14 @@ export default function AdminPage() {
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          setHistoryPoints(buildFallbackHistoryPoints(selectedRestroom, chartRange));
+          setDataError(`측정 이력 조회 실패: ${error.message}`);
         }
       } finally { pending = false; }
     };
     refresh();
-    const timer = setInterval(refresh, 30000);
+    const timer = setInterval(refresh, appliedSettings.refreshSeconds * 1000);
     return () => { controller.abort(); clearInterval(timer); };
-  }, [selectedRestroom?.id, selectedRestroom?.macAddress, chartRange]);
+  }, [selectedRestroom?.id, selectedRestroom?.macAddress, chartRange, appliedSettings.refreshSeconds]);
 
   // 권한에 따른 접근 가능 구역(화장실) 목록 필터링
   const accessibleRestrooms = restrooms.filter(r => canAccessZone(r.id));
@@ -912,15 +954,8 @@ export default function AdminPage() {
     });
 
   // 권한 구역 내 알림 및 청소 이력 필터링
-  const accessibleAlerts = alerts.filter(a => {
-    const matchedR = restrooms.find(r => r.name === a.restroom);
-    return matchedR ? canAccessZone(matchedR.id) : (user?.role === ROLES.DEVELOPER);
-  });
-
-  const accessibleCleaningLogs = cleaningLogs.filter(log => {
-    const matchedR = restrooms.find(r => r.name === log.restroomName);
-    return matchedR ? canAccessZone(matchedR.id) : (user?.role === ROLES.DEVELOPER);
-  });
+  const accessibleAlerts=filterZoneRecords(alerts,canAccessZone);
+  const accessibleCleaningLogs=filterZoneRecords(cleaningLogs,canAccessZone);
 
   // 집계 수치 (권한 구역 기준)
   const totalCount = accessibleRestrooms.length;
@@ -943,39 +978,14 @@ export default function AdminPage() {
   };
 
   // 퀵 청소 완료 저장
-  const handleSaveQuickCleaning = () => {
-    if (!cleaningTarget) return;
-
-    setRestrooms(prev => prev.map(r => {
-      if (r.id === cleaningTarget.id) {
-        return {
-          ...r,
-          lastCleanedHours: 0,
-          cleanWorker: quickCleaningWorker,
-          gas: r.isLive ? r.gas : Math.min(r.gas, 260),
-          status: r.isLive ? r.status : 'NORMAL'
-        };
-      }
-      return r;
-    }));
-
-    const newLog = {
-      id: Date.now(),
-      time: new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-      restroomName: cleaningTarget.name,
-      worker: quickCleaningWorker,
-      type: '수시 점검',
-      memo: quickCleaningMemo
-    };
-    setCleaningLogs(prev => [newLog, ...prev]);
-
-    setIsCleaningModalOpen(false);
-    showToast(`[${cleaningTarget.name}] 청소 완료 처리되었습니다.`);
+  const handleSaveQuickCleaning = async () => {
+    try {await saveConfirmedCleaning(cleaningTarget,quickCleaningWorker,'수시 점검',quickCleaningMemo);setIsCleaningModalOpen(false);showToast('청소 기록이 저장되었습니다.');}
+    catch(error){showToast(`청소 기록 저장 실패: ${error.message}`);}
   };
 
   // 관리자 전용: 출동 지시 팝업 모달 열기
   const handleOpenDispatchModal = (targetId = null) => {
-    const delayed = accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours);
+    const delayed = accessibleRestrooms.filter(r => r.lastCleanedHours >= appliedSettings.cleanWarnHours);
     if (targetId) {
       setDispatchTargetId(targetId);
     } else if (delayed.length > 0) {
@@ -987,8 +997,8 @@ export default function AdminPage() {
     }
 
     // 기본 선택: 대기 중인 인원 우선 배정
-    const readyCleaners = AVAILABLE_CLEANERS.filter(c => c.isAvailable);
-    setSelectedCleanerIds(readyCleaners.length > 0 ? [readyCleaners[0].id] : ['cleaner1']);
+    const readyCleaners = cleanersList.filter(c => c.isAvailable);
+    setSelectedCleanerIds(readyCleaners.length > 0 ? [readyCleaners[0].id] : (cleanersList[0] ? [cleanersList[0].id] : ['1']));
     setDispatchType('긴급 바닥 청소 및 살균 소독');
     setDispatchUrgency('EMERGENCY');
     setDispatchMemo('청소 기준 시간 초과 구역 현장 점검 및 즉시 소독 조치 요망');
@@ -1012,194 +1022,795 @@ export default function AdminPage() {
 
   // 대기 인원 전체 선택
   const handleSelectAllAvailableCleaners = () => {
-    const availableIds = AVAILABLE_CLEANERS.filter(c => c.isAvailable).map(c => c.id);
+    const availableIds = cleanersList.filter(c => c.isAvailable).map(c => c.id);
     setSelectedCleanerIds(availableIds);
     showToast(`대기 중인 미화 인원 ${availableIds.length}명이 일괄 선택되었습니다.`);
   };
 
   // 출동 지시 최종 발령
-  const handleConfirmDispatch = () => {
-    if (selectedCleanerIds.length === 0) {
-      showToast('출동을 지시할 인원을 최소 1명 이상 선택해주세요.');
-      return;
-    }
-
-    const selectedWorkers = AVAILABLE_CLEANERS.filter(c => selectedCleanerIds.includes(c.id));
-    const workerNames = selectedWorkers.map(c => c.name);
-
-    // 대상 구역 산출
-    let targetRestrooms = [];
-    let targetSummaryTitle = '';
-
-    if (dispatchTargetId === 'ALL_DELAYED') {
-      const delayed = accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours);
-      targetRestrooms = delayed.length > 0 ? delayed : accessibleRestrooms;
-      targetSummaryTitle = delayed.length > 0
-        ? `청소 지연 ${delayed.length}개소(${delayed.map(d => d.name).join(', ')})`
-        : `담당 ${accessibleRestrooms.length}개소`;
-    } else if (dispatchTargetId === 'ALL_ACCESSIBLE') {
-      targetRestrooms = accessibleRestrooms;
-      targetSummaryTitle = `전체 담당 ${accessibleRestrooms.length}개소`;
-    } else {
-      const single = accessibleRestrooms.find(r => String(r.id) === String(dispatchTargetId));
-      targetRestrooms = single ? [single] : [];
-      targetSummaryTitle = single ? single.name : '지정 구역';
-    }
-
-    const nowTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-    const nowDateStr = new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-
-    // 1. 시스템 현장 알림(Alerts) 생성
-    const newAlert = {
-      id: Date.now(),
-      time: nowTime,
-      restroom: targetRestrooms.length === 1 ? targetRestrooms[0].name : (targetRestrooms[0]?.name || '담당 구역'),
-      metric: '출동 지시',
-      value: `${workerNames.join(', ')} (${workerNames.length}명)`,
-      level: dispatchUrgency === 'EMERGENCY' ? 'DANGER' : 'WARN',
-      isChecked: false,
-      memo: `[${dispatchType}] ${dispatchMemo || '관리자 현장 긴급 출동 발령'}`
-    };
-    setAlerts(prev => [newAlert, ...prev]);
-
-    // 2. 작업 이력(CleaningLogs)에 출동 지시 내역 기록
-    const newLog = {
-      id: Date.now() + 1,
-      time: nowDateStr,
-      restroomName: targetRestrooms.length === 1 ? targetRestrooms[0].name : targetSummaryTitle,
-      worker: workerNames.join(', '),
-      type: `출동 발령: ${dispatchType}`,
-      memo: `[${dispatchUrgency === 'EMERGENCY' ? '긴급출동' : '일반출동'}] ${dispatchMemo || '현장 점검 지시'}`
-    };
-    setCleaningLogs(prev => [newLog, ...prev]);
-
-    // 3. 대상 구역의 담당자 표시 업데이트
-    if (targetRestrooms.length > 0) {
-      const targetIds = targetRestrooms.map(t => t.id);
-      setRestrooms(prev => prev.map(r => {
-        if (targetIds.includes(r.id)) {
-          return {
-            ...r,
-            cleanWorker: workerNames[0] + (workerNames.length > 1 ? ` 외 ${workerNames.length - 1}명` : '')
-          };
-        }
-        return r;
-      }));
-    }
-
-    // 4. 모달 닫기 및 알림 피드백
-    setIsDispatchModalOpen(false);
-    showToast(`📢 [${workerNames.join(', ')}] ${workerNames.length}명에게 [${targetSummaryTitle}] ${dispatchType} 출동 지시를 전송했습니다.`);
+  const handleConfirmDispatch = async () => {
+    const workerIds=selectedCleanerIds.map(Number).filter(id=>Number.isInteger(id)&&id>0);
+    let targets=accessibleRestrooms;
+    if(dispatchTargetId==='ALL_DELAYED') targets=targets.filter(row=>row.lastCleanedHours>=appliedSettings.cleanWarnHours);
+    else if(dispatchTargetId!=='ALL_ACCESSIBLE') targets=targets.filter(row=>String(row.id)===String(dispatchTargetId));
+    if(!workerIds.length || !targets.length){showToast('실제 담당 인원과 대상 구역을 선택해주세요.');return;}
+    try {
+      const result=await createDispatchApi({workerIds,zoneIds:targets.map(row=>row.id),type:dispatchType,urgency:dispatchUrgency,memo:dispatchMemo});
+      setWorkers(prev=>prev.map(row=>result.workers.find(saved=>saved.id===row.id)||row));
+      setCleaningLogs(prev=>[...result.records.map(recordToLog),...prev]);
+      setIsDispatchModalOpen(false);showToast('출동 지시가 저장되었습니다.');
+    }catch(error){showToast(`출동 지시 저장 실패: ${error.message}`);}
   };
 
   // 청소 관리 전용 폼 등록 핸들러 (SCR-05 FR-50)
-  const handleSubmitCleaningForm = (e) => {
-    e.preventDefault();
-    if (!cleanFormWorker.trim()) {
-      alert('담당자 성명을 입력해주세요.');
-      return;
-    }
-
-    const targetRestroom = accessibleRestrooms.find(r => String(r.id) === String(cleanFormRestroomId)) || accessibleRestrooms[0];
-    if (!targetRestroom) return;
-
-    // 1. 해당 화장실 경과 시간 리셋 & 공기 정화
-    setRestrooms(prev => prev.map(r => {
-      if (r.id === targetRestroom.id) {
-        return {
-          ...r,
-          lastCleanedHours: 0,
-          cleanWorker: cleanFormWorker,
-          gas: Math.min(r.gas ?? 250, 250),
-          status: 'NORMAL'
-        };
-      }
-      return r;
-    }));
-
-    // 2. 청소 이력 테이블 추가
-    const newLog = {
-      id: Date.now(),
-      time: new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-      restroomName: targetRestroom.name,
-      worker: cleanFormWorker,
-      type: cleanFormType,
-      memo: cleanFormMemo || '특이사항 없음'
-    };
-    setCleaningLogs(prev => [newLog, ...prev]);
-
-    // 3. 폼 초기화
-    setCleanFormMemo('');
-    showToast(`[${targetRestroom.name}] 청소 기록이 정상 등록되었습니다.`);
+  const handleSubmitCleaningForm = async (event) => {
+    event.preventDefault();
+    if(!cleanFormWorker.trim()){showToast('담당자를 입력해주세요.');return;}
+    const target=accessibleRestrooms.find(row=>String(row.id)===String(cleanFormRestroomId));
+    try {await saveConfirmedCleaning(target,cleanFormWorker,cleanFormType,cleanFormMemo||'특이사항 없음');setCleanFormMemo('');showToast('청소 기록이 저장되었습니다.');}
+    catch(error){showToast(`청소 기록 저장 실패: ${error.message}`);}
   };
 
-  // 신규 화장실 등록 핸들러 (SCR-06 FR-60)
-  const handleAddRestroom = () => {
-    if (!newRestroomName.trim() || !newRestroomDeviceId.trim()) {
-      alert('화장실 이름과 기기 ID를 모두 입력해주세요.');
+  // 환경 임계값 저장 핸들러 (온습도·가스 전체 MySQL DB 영구 반영 - F10)
+  const handleSaveThresholds = async () => {
+    const zoneIds=thresholdScope==='ALL'?accessibleRestrooms.map(row=>row.id):[Number(thresholdScope)];
+    const globalSettings=user.role===ROLES.DEVELOPER?{
+      temp_warning_threshold:String(thresholds.tempWarn),temp_danger_threshold:String(thresholds.tempDanger),
+      humidity_warning_threshold:String(thresholds.humidWarn),humidity_danger_threshold:String(thresholds.humidDanger),
+      gas_warning_threshold:String(thresholds.gasWarn),gas_danger_threshold:String(thresholds.gasDanger)}:null;
+    try {await saveZoneThresholdsApi({zoneIds,pleasantThreshold:thresholds.gasWarn,needsVentilationThreshold:thresholds.gasDanger,globalSettings});
+      showToast('임계값이 저장되었습니다.');await handleManualRefresh();
+    }catch(error){showToast(`임계값 저장 실패: ${error.message}`);}
+  };
+
+  const selectThresholdScope = (value) => {
+    setThresholdScope(value);
+    const selected=rawRestrooms.find(row=>row.id===Number(value));
+    if(selected) setThresholds(prev=>({...prev,gasWarn:selected.pleasantThreshold??prev.gasWarn,gasDanger:selected.needsVentilationThreshold??prev.gasDanger}));
+  };
+
+  // 신규 화장실/노드 등록 핸들러 (SCR-06 FR-60)
+  const handleAddRestroom = async () => {
+    if (!newRestroomName.trim()) {
+      alert('화장실 명칭을 입력해주세요.');
       return;
     }
 
-    if (restrooms.some(r => r.deviceId === newRestroomDeviceId)) {
-      alert('이미 등록된 기기 ID입니다.');
+    const parsedLat = parseFloat(newRestroomLat);
+    const parsedLng = parseFloat(newRestroomLng);
+    if (isNaN(parsedLat) || isNaN(parsedLng)) {
+      alert('유효한 위도(Latitude)·경도(Longitude) 좌표를 입력하거나 [현재 내 위치로 좌표 설정] 버튼을 눌러주세요.');
       return;
     }
 
-    const newR = {
-      id: Date.now(),
-      name: newRestroomName,
-      floor: newRestroomFloor,
-      gender: newRestroomGender,
-      deviceId: newRestroomDeviceId,
-      macAddress: newRestroomDeviceId,
-      temp: 23.0,
-      humidity: 50.0,
-      gas: 250,
-      status: 'NORMAL',
-      isActive: true,
-      lastUpdated: '방금',
-      lastCleanedHours: 0,
-      cleanWorker: '담당자 미지정',
-      lat: 37.5665,
-      lng: 126.9780
-    };
+    try {
+      setDataLoading(true);
+      const selectedWorker = workers.find(w => String(w.id) === String(newRestroomWorkerId));
+      // 1. 백엔드 MySQL DB에 신규 Zone 생성 (GPS 위도/경도 및 담당 청소관리인 포함)
+      await createBackendZone({
+        name: newRestroomName.trim(),
+        floor: newRestroomFloor,
+        gender: newRestroomGender,
+        deviceId: newRestroomDeviceId.trim(),
+        lat: parsedLat,
+        lng: parsedLng,
+        zoneType: 'TOILET',
+        pleasantThreshold: 300.0,
+        needsVentilationThreshold: 600.0,
+        assignedWorkerId: selectedWorker ? Number(selectedWorker.id) : null,
+        assignedWorkerName: selectedWorker ? selectedWorker.name : null
+      });
 
-    setRestrooms(prev => [...prev, newR]);
-    setIsAddRestroomModalOpen(false);
-    setNewRestroomName('');
-    setNewRestroomDeviceId('');
-    showToast(`신규 화장실 [${newR.name}]이 성공적으로 등록되었습니다.`);
+      const registeredName = newRestroomName.trim();
+      setIsAddRestroomModalOpen(false);
+      setNewRestroomName('');
+      setNewRestroomDeviceId('');
+      setNewRestroomWorkerId('');
+      setGpsStatusMsg('');
+      showToast(`신규 화장실 노드 [${registeredName}]이 좌표(${parsedLat}, ${parsedLng})와 함께 DB에 저장되었습니다.`);
+
+      // 2. 백엔드 DB로부터 최신 목록 즉시 새로고침
+      const sets = await fetchDeviceSetsApi().catch(() => null);
+      if (sets) setDeviceSets(sets);
+      await handleManualRefresh();
+      await loadDiscoveredDevices();
+    } catch (err) {
+      console.error('화장실 DB 등록 오류:', err);
+      showToast(`등록 실패: ${err.message}`);
+    } finally {
+      setDataLoading(false);
+    }
   };
 
   // 화장실 활성/비활성화 토글
-  const handleToggleRestroomActive = (id) => {
-    const target = rawRestrooms.find(r => r.id === id);
-    if (!target) return;
-    const next = !target.isActive;
-    setRestrooms(prev => prev.map(r => (r.id === id ? { ...r, isActive: next, status: next ? 'NORMAL' : 'OFFLINE' } : r)));
-    showToast(`[${target.name}] 상태가 ${next ? '활성화' : '비활성화'}되었습니다.`);
+  const handleToggleRestroomActive = async (id) => {
+    try {
+      const active=await toggleZoneActiveApi(id);
+      setRestrooms(prev=>prev.map(row=>row.id===id?{...row,isActive:active,status:active?'UNKNOWN':'INACTIVE'}:row));
+      showToast(`구역이 ${active?'활성화':'비활성화'}되었습니다.`);
+      await handleManualRefresh();
+    }catch(error){showToast(`구역 상태 저장 실패: ${error.message}`);}
   };
 
   // 화장실 시설 삭제 핸들러 (개발자 전용)
-  const handleDeleteRestroom = (id) => {
+  const handleDeleteRestroom = async (id) => {
     const target = rawRestrooms.find(r => r.id === id);
     if (!target) return;
     if (rawRestrooms.length <= 1) {
       showToast('최소 1개 이상의 관제 구역이 유지되어야 합니다.');
       return;
     }
-    setRestrooms(prev => prev.filter(r => r.id !== id));
-    showToast(`[${target.name}] 시설이 목록에서 삭제되었습니다.`);
+    if (!window.confirm(`[${target.name}] 시설을 데이터베이스에서 완전히 삭제하시겠습니까?`)) {
+      return;
+    }
+
+    try {
+      setDataLoading(true);
+      // 1. 백엔드 MySQL DB에서 삭제 요청
+      await deleteBackendZone(id);
+      setRestrooms(prev => prev.filter(r => r.id !== id));
+      showToast(`[${target.name}] 시설이 데이터베이스에서 삭제되었습니다.`);
+      // 2. 백엔드 목록 즉시 동기화
+      await handleManualRefresh();
+    } catch (err) {
+      console.error('시설 삭제 오류:', err);
+      showToast(`삭제 실패: ${err.message}`);
+    } finally {
+      setDataLoading(false);
+    }
   };
 
-  const handleCheckAlert = (id, e) => {
-    e.stopPropagation();
-    setAlerts(prev => prev.map(a => a.id === id ? { ...a, isChecked: true } : a));
-    showToast('확인 완료되었습니다.');
+  // 신규 관제 구역(건물/층) 생성 핸들러 (POST /api/dev/zones)
+  const handleCreateZone = async () => {
+    if (!newZoneName.trim()) {
+      alert('구역 명칭을 입력해주세요.');
+      return;
+    }
+    try {
+      setDataLoading(true);
+      await createBackendZone({
+        name: newZoneName.trim(),
+        floor: newZoneFloor,
+        address: newZoneAddress.trim(),
+        // 입력하지 않은 좌표는 비워 둔다(지도에 가짜 위치를 만들지 않음).
+        latitude: Number.isFinite(parseFloat(newZoneLat)) ? parseFloat(newZoneLat) : null,
+        longitude: Number.isFinite(parseFloat(newZoneLng)) ? parseFloat(newZoneLng) : null,
+        zoneType: newZoneType
+      });
+      showToast('신규 관제 구역이 DB(MySQL)에 등록되었습니다.');
+      setIsAddZoneModalOpen(false);
+      setNewZoneName('');
+      await handleManualRefresh();
+    } catch (err) {
+      console.error('구역 등록 실패:', err);
+      showToast('구역 등록 실패: ' + err.message);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  // 기기 세트 수정 열기 (화장실 목록에서 호출)
+  const handleOpenEditZone = (restroom) => {
+    const matchingSet = deviceSets.find(ds =>
+      (restroom.macAddress && ds.macAddress?.toLowerCase() === restroom.macAddress?.toLowerCase()) ||
+      Number(ds.zoneId) === Number(restroom.id)
+    );
+    const existingMac = matchingSet?.macAddress || (restroom.macAddress && !restroom.macAddress.startsWith('ZONE-') ? restroom.macAddress : '');
+
+    setEditingZone({
+      id: restroom.id,
+      name: restroom.name || '',
+      floor: restroom.floor || '미등록',
+      gender: restroom.gender || '미등록',
+      address: restroom.address || '',
+      latitude: String(restroom.lat ?? ''),
+      longitude: String(restroom.lng ?? ''),
+      lat: String(restroom.lat ?? ''),
+      lng: String(restroom.lng ?? ''),
+      zoneType: restroom.zoneType || 'TOILET',
+      isOurSolution:restroom.isLive,
+      pleasantThreshold: restroom.pleasantThreshold ?? thresholds.gasWarn ?? 300,
+      needsVentilationThreshold: restroom.needsVentilationThreshold ?? thresholds.gasDanger ?? 600,
+      assignedWorkerId: restroom.assignedWorkerId != null ? String(restroom.assignedWorkerId) : '',
+      deviceSetId: matchingSet?.deviceSetId || null,
+      macAddress: existingMac,
+      originalMacAddress: existingMac
+    });
+    setGpsStatusMsg('');
+    setIsEditZoneModalOpen(true);
+  };
+
+  // 화장실(Zone) 정보 수정 저장 (PUT /api/dev/zones/{id} - F02)
+  const handleSaveEditZone = async () => {
+    if (!editingZone || !editingZone.name.trim()) {
+      showToast('시설 명칭을 입력해주세요.');
+      return;
+    }
+    const candidateMac=editingZone.macAddress?.trim();
+    if(candidateMac&&!/^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(candidateMac)) {
+      showToast('유효한 MAC 주소를 입력해주세요.');return;
+    }
+    try {
+      setDataLoading(true);
+      const selectedWorker = workers.find(w => String(w.id) === String(editingZone.assignedWorkerId));
+      const payload=facilityPayload({
+        ...editingZone,name:editingZone.name.trim(),
+        deviceId:candidateMac,assignedWorkerId:selectedWorker?.id ?? null,
+        pleasantThreshold:Number(editingZone.pleasantThreshold),
+        needsVentilationThreshold:Number(editingZone.needsVentilationThreshold)
+      });
+      if(payload.device)payload.device.deviceSetId=editingZone.deviceSetId;
+      await updateFacilityApi(editingZone.id,payload);
+      setDeviceSets(await fetchDeviceSetsApi());
+
+      setIsEditZoneModalOpen(false);
+      setEditingZone(null);
+      showToast(`[${editingZone.name}] 시설 정보 및 기기 설정이 DB에 반영되었습니다.`);
+      await handleManualRefresh();
+    } catch (err) {
+      console.error('시설 수정 오류:', err);
+      showToast(`시설 수정 실패: ${err.message}`);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  // 기기 세트 수정 열기 (화장실 목록에서 호출)
+  const handleOpenEditDeviceSet = (restroom) => {
+    const matchingSet = (deviceSets || []).find(ds =>
+      (restroom.macAddress && ds.macAddress?.toLowerCase() === restroom.macAddress?.toLowerCase()) ||
+      Number(ds.zoneId) === Number(restroom.id)
+    );
+    setEditingDeviceSet({
+      id: matchingSet ? matchingSet.deviceSetId : null,
+      label: matchingSet?.installationLabel || restroom.name,
+      zoneId: matchingSet?.zoneId || restroom.id,
+      macAddress: matchingSet?.macAddress || (restroom.macAddress && !restroom.macAddress.startsWith('ZONE-') ? restroom.macAddress : ''),
+      isNew: !matchingSet
+    });
+    setIsEditDeviceSetModalOpen(true);
+  };
+
+  // 기기 세트 수정 열기 (기기 세트 목록에서 직접 호출 - PATCH /api/admin/device-sets/{id})
+  const handleOpenEditDeviceSetFromSet = (ds) => {
+    setEditingDeviceSet({
+      id: ds.deviceSetId,
+      label: ds.installationLabel || ds.setCode,
+      zoneId: ds.zoneId,
+      macAddress: ds.macAddress,
+      isNew: false
+    });
+    setIsEditDeviceSetModalOpen(true);
+  };
+
+  // 기기 세트 수정 저장 (PATCH /api/admin/device-sets/{id} 또는 신규 등록)
+  const handleSaveEditDeviceSet = async () => {
+    if (!editingDeviceSet) return;
+    const mac = editingDeviceSet.macAddress?.trim();
+    if (!mac) {
+      showToast('ESP32 MAC 주소를 입력해주세요.');
+      return;
+    }
+    const macPattern = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
+    if (!macPattern.test(mac)) {
+      showToast('유효한 MAC 주소 형식(예: 24:DC:C3:99:AA:01)을 입력해주세요.');
+      return;
+    }
+    const normalizedMac = mac.toUpperCase().replace(/-/g, ':');
+    const targetZoneId = Number(editingDeviceSet.zoneId);
+
+    try {
+      setDataLoading(true);
+      if (editingDeviceSet.id) {
+        await updateDeviceSetApi(editingDeviceSet.id, {
+          zoneId: targetZoneId,
+          installationLabel: editingDeviceSet.label?.trim() || `Zone #${targetZoneId} 세트`,
+          macAddress: normalizedMac
+        });
+        showToast('아두이노 기기 위치(구역) 및 MAC 주소가 DB에 수정되었습니다.');
+      } else {
+        await createDeviceSetApi({
+          setCode: `SET-${targetZoneId}`,
+          macAddress: normalizedMac,
+          zoneId: targetZoneId,
+          installationLabel: editingDeviceSet.label?.trim() || `Zone #${targetZoneId} 세트`
+        });
+        showToast('신규 아두이노 기기 매핑이 DB에 등록되었습니다.');
+      }
+      setIsEditDeviceSetModalOpen(false);
+      setEditingDeviceSet(null);
+      const sets = await fetchDeviceSetsApi().catch(() => null);
+      if (sets) setDeviceSets(sets);
+      await handleManualRefresh();
+    } catch (err) {
+      console.error('기기 수정 실패:', err);
+      showToast('기기 정보 수정 실패: ' + err.message);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  // 기기 세트 감사 히스토리 열기 (화장실 목록에서 호출 - deviceSets[0] 폴백 제거 F02)
+  const handleOpenDeviceSetHistory = async (restroom) => {
+    const matchingSet = deviceSets.find(ds =>
+      (restroom.macAddress && ds.macAddress?.toLowerCase() === restroom.macAddress?.toLowerCase()) ||
+      Number(ds.zoneId) === Number(restroom.id)
+    );
+    if (!matchingSet) {
+      showToast(`[${restroom.name}] 구역에 매핑된 기기 세트가 없어 변경 이력을 조회할 수 없습니다.`);
+      return;
+    }
+    setHistoryDeviceSetTitle(`${matchingSet.setCode} - ${restroom.name || matchingSet.installationLabel}`);
+    try {
+      setDataLoading(true);
+      const hist = await fetchDeviceSetHistoryApi(matchingSet.deviceSetId);
+      setDeviceSetHistories(hist);
+    } catch (err) {
+      console.error('기기 이력 조회 실패:', err);
+      setDeviceSetHistories([]);
+    } finally {
+      setDataLoading(false);
+    }
+    setIsHistoryModalOpen(true);
+  };
+
+  // 기기 세트 감사 히스토리 열기 (기기 세트 목록에서 직접 호출 - GET /api/admin/device-sets/{id}/history)
+  const handleOpenDeviceSetHistoryFromSet = async (ds) => {
+    setHistoryDeviceSetTitle(`${ds.setCode} (${ds.installationLabel || ds.macAddress})`);
+    try {
+      setDataLoading(true);
+      const hist = await fetchDeviceSetHistoryApi(ds.deviceSetId);
+      setDeviceSetHistories(hist);
+    } catch (err) {
+      console.error('기기 이력 조회 실패:', err);
+      setDeviceSetHistories([]);
+    } finally {
+      setDataLoading(false);
+    }
+    setIsHistoryModalOpen(true);
+  };
+
+  // 기기 세트 삭제 (DELETE /api/admin/device-sets/{id})
+  const handleDeleteDeviceSet = async (deviceSetId) => {
+    if (!window.confirm(`기기 세트 #${deviceSetId}를 정말 삭제하시겠습니까? 연결된 센서 매핑이 해제됩니다.`)) return;
+    try {
+      setDataLoading(true);
+      await deleteDeviceSetApi(deviceSetId);
+      showToast('기기 세트가 삭제되었습니다.');
+      const sets = await fetchDeviceSetsApi();
+      setDeviceSets(sets);
+      await handleManualRefresh();
+    } catch (err) {
+      console.error('기기 세트 삭제 실패:', err);
+      showToast('기기 삭제 실패: ' + err.message);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  // 센서 단독 추가 핸들러 (POST /api/dev/sensors)
+  const handleCreateSensor = async () => {
+    if (!newSensorData.zoneId) {
+      showToast('센서를 설치할 구역을 선택해주세요.');
+      return;
+    }
+    try {
+      setDataLoading(true);
+      const sensorId = await createBackendSensor({
+        zoneId: Number(newSensorData.zoneId),
+        sensorType: newSensorData.sensorType
+      });
+      showToast(`센서(ID: ${sensorId})가 구역 #${newSensorData.zoneId}에 단독 등록되었습니다.`);
+      setIsAddSensorModalOpen(false);
+      const updatedSensors = await fetchSensorsApi();
+      setSensorsList(updatedSensors);
+      await handleManualRefresh();
+    } catch (err) {
+      console.error('센서 단독 등록 실패:', err);
+      showToast('센서 등록 실패: ' + err.message);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  const issueDeviceKey = async (mac) => {
+    try {const issued=await rotateDeviceKeyApi(mac);setIssuedCredential(issued);}
+    catch(error){showToast(error.message);}
+  };
+  const revokeDeviceKey = async (mac) => {
+    try {await revokeDeviceKeyApi(mac);setIssuedCredential(null);showToast('장치 키가 폐기되었습니다.');}
+    catch(error){showToast(error.message);}
+  };
+
+  // 중앙 시스템 운영 설정 저장 핸들러 (PUT /api/admin/settings)
+  const handleSaveSystemSettings = async () => {
+    try {
+      await updateSystemSettingsApi({offline_timeout_seconds:String(systemSettings.offlineSeconds),polling_interval_seconds:String(systemSettings.refreshSeconds),clean_warning_interval_hours:String(systemSettings.cleanWarnHours)});
+      setAppliedSettings({...systemSettings});showToast('운영 설정이 저장되어 적용되었습니다.');
+    }catch(error){showToast(`운영 설정 저장 실패: ${error.message}`);}
+  };
+
+  const handleCheckAlert = async (id,event) => {
+    event?.stopPropagation();
+    try {
+      if(typeof id!=='number' || id>=1000000000000) throw new Error('서버에 등록된 알림만 조치할 수 있습니다.');
+      await resolveAlertApi(id,'현장 확인 및 조치 완료');
+      setAlerts(prev=>prev.map(row=>row.id===id?{...row,isChecked:true}:row));showToast('조치 기록이 저장되었습니다.');
+    }catch(error){showToast(`알림 조치 실패: ${error.message}`);}
   };
 
   // 측정 시각을 x값으로 써서 수신이 끊긴 구간도 실제 시간 간격대로 보이게 합니다.
-  const historyTimes = historyPoints.map(point => new Date(point.measuredAt).getTime());
+  const handleResetWorkerForm = () => {
+    setEditingWorkerId(null);
+    setWorkerFormName('');
+    setWorkerFormPhone('');
+    setWorkerFormRole('환경미화 1팀 (주간 전담)');
+    setWorkerFormStatus('AVAILABLE');
+    setWorkerFormZoneId('');
+  };
+
+  const handleEditWorkerClick = (worker) => {
+    setEditingWorkerId(worker.id);
+    setWorkerFormName(worker.name || '');
+    setWorkerFormPhone(worker.phone || '');
+    setWorkerFormRole(worker.role || '환경미화 1팀');
+    setWorkerFormStatus(worker.status || 'AVAILABLE');
+    setWorkerFormZoneId(worker.assignedZoneId != null ? String(worker.assignedZoneId) : '');
+  };
+
+  const handleSaveWorkerForm = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!workerFormName.trim()) {
+      alert('청소관리인 성명을 입력해주세요.');
+      return;
+    }
+
+    const assignedZoneId = workerFormZoneId ? Number(workerFormZoneId) : null;
+    const payload = {
+      name: workerFormName.trim(),
+      phone: workerFormPhone.trim() || '010-0000-0000',
+      role: workerFormRole.trim() || '위생관리 전담',
+      status: workerFormStatus || 'AVAILABLE',
+      assignedZoneId: assignedZoneId
+    };
+
+    try {
+      setDataLoading(true);
+      if (editingWorkerId) {
+        const updated = await updateWorkerApi(editingWorkerId, payload);
+        if (assignedZoneId) {
+          await assignZoneWorkerApi(assignedZoneId, updated.id, updated.name).catch(() => {});
+        }
+        showToast(`청소관리인 [${updated.name}]님의 정보 및 담당 구역이 수정되었습니다.`);
+      } else {
+        const created = await createWorkerApi(payload);
+        if (assignedZoneId && created?.id) {
+          await assignZoneWorkerApi(assignedZoneId, created.id, created.name).catch(() => {});
+        }
+        showToast(`신규 청소관리인 [${created.name}]님이 등록되었습니다.`);
+      }
+
+      handleResetWorkerForm();
+      const freshWorkers = await fetchWorkersApi();
+      setWorkers(freshWorkers || []);
+      await handleManualRefresh();
+    } catch (err) {
+      console.error('청소관리인 저장 오류:', err);
+      showToast(`청소관리인 저장 실패: ${err.message}`);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  const handleChangeWorkerStatus = async (workerId, newStatus) => {
+    try {
+      await updateWorkerStatusApi(workerId, newStatus);
+      setWorkers(prev => prev.map(w => Number(w.id) === Number(workerId) ? { ...w, status: newStatus } : w));
+      const statusLabel = newStatus === 'AVAILABLE' ? '대기 중(출동 가능)' : newStatus === 'DISPATCHED' ? '현장 작업 중' : '휴무';
+      showToast(`근무 상태가 [${statusLabel}]로 변경되었습니다.`);
+    } catch (err) {
+      showToast(`상태 변경 실패: ${err.message}`);
+    }
+  };
+
+  const loadDiscoveredDevices = async () => {
+    try {
+      const list = await fetchDiscoveredDevicesApi();
+      if (Array.isArray(list)) {
+        setDiscoveredDevices(list);
+      }
+    } catch (e) {
+      console.warn('[AdminPage] 미등록 기기 목록 조회 실패:', e);
+    }
+  };
+
+  const handleRegisterDiscoveredDevice = (dev) => {
+    setNewRestroomDeviceId(dev.macAddress);
+    if (dev.latitude != null && dev.longitude != null) {
+      setNewRestroomLat(String(dev.latitude));
+      setNewRestroomLng(String(dev.longitude));
+    }
+    setIsAddRestroomModalOpen(true);
+    showToast(`기기 MAC [${dev.macAddress}]이(가) 자동 입력되었습니다. 화장실 시설 정보를 입력해 주세요.`);
+  };
+
+  const handleDismissDiscoveredDevice = async (mac) => {
+    try {
+      await dismissDiscoveredDeviceApi(mac);
+      setDiscoveredDevices(prev => prev.filter(d => d.macAddress !== mac));
+      showToast(`미등록 기기 [${mac}] 항목을 대기 목록에서 제외했습니다.`);
+    } catch (e) {
+      alert('기기 항목 제외 실패: ' + e.message);
+    }
+  };
+
+  const reverseGeocode = (lat, lng) => {
+    if (!window.kakao || !window.kakao.maps || !window.kakao.maps.services) {
+      setPickerAddress('');
+      return;
+    }
+    try {
+      const geocoder = new window.kakao.maps.services.Geocoder();
+      geocoder.coord2Address(lng, lat, (result, status) => {
+        if (status === window.kakao.maps.services.Status.OK && result && result.length > 0) {
+          const road = result[0].road_address?.address_name;
+          const jibun = result[0].address?.address_name;
+          setPickerAddress(road || jibun || '');
+        } else {
+          setPickerAddress('');
+        }
+      });
+    } catch (err) {
+      console.warn('역지오코딩 처리 실패:', err);
+      setPickerAddress('');
+    }
+  };
+
+  const openLocationPicker = (target = 'restroom') => {
+    setLocationPickerTarget(target);
+    let initialLat = 37.566826;
+    let initialLng = 126.978656;
+
+    if (target === 'zone') {
+      const parsedLat = parseFloat(newZoneLat);
+      const parsedLng = parseFloat(newZoneLng);
+      if (!isNaN(parsedLat) && !isNaN(parsedLng) ) {
+        initialLat = parsedLat;
+        initialLng = parsedLng;
+      }
+    } else if (target === 'editZone') {
+      const parsedLat = parseFloat(editingZone?.lat || editingZone?.latitude);
+      const parsedLng = parseFloat(editingZone?.lng || editingZone?.longitude);
+      if (!isNaN(parsedLat) && !isNaN(parsedLng) ) {
+        initialLat = parsedLat;
+        initialLng = parsedLng;
+      }
+    } else {
+      // restroom
+      const parsedLat = parseFloat(newRestroomLat);
+      const parsedLng = parseFloat(newRestroomLng);
+      if (!isNaN(parsedLat) && !isNaN(parsedLng) ) {
+        initialLat = parsedLat;
+        initialLng = parsedLng;
+      }
+    }
+
+    setPickerLat(initialLat);
+    setPickerLng(initialLng);
+    setPickerMapCenter({ lat: initialLat, lng: initialLng });
+    setPickerSearchKeyword('');
+    setPickerSearchResults([]);
+    reverseGeocode(initialLat, initialLng);
+    setIsLocationPickerOpen(true);
+  };
+
+  const handleSetCurrentGpsLocation = (target = 'restroom') => {
+    if (!navigator.geolocation) {
+      setGpsStatusMsg('현재 브라우저에서 GPS 위치 기능(Geolocation)을 지원하지 않습니다.');
+      showToast('이 브라우저에서는 GPS 기능을 지원하지 않습니다.');
+      return;
+    }
+
+    setIsGpsLocating(true);
+    setGpsStatusMsg('스마트폰 GPS 위성 신호를 수신하고 있습니다...');
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude.toFixed(6);
+        const lng = position.coords.longitude.toFixed(6);
+        const accuracy = Math.round(position.coords.accuracy || 0);
+
+        if (target === 'zone') {
+          setNewZoneLat(lat);
+          setNewZoneLng(lng);
+        } else if (target === 'editZone') {
+          setEditingZone(prev => prev ? { ...prev, latitude: lat, longitude: lng, lat, lng } : prev);
+        } else {
+          setNewRestroomLat(lat);
+          setNewRestroomLng(lng);
+          setNewZoneLat(lat);
+          setNewZoneLng(lng);
+        }
+
+        setIsGpsLocating(false);
+        setGpsStatusMsg(`현재 위치 좌표 설정 완료 (${lat}, ${lng}${accuracy ? ` · 정확도 ±${accuracy}m` : ''})`);
+        showToast(`현재 스마트폰 GPS 위치(${lat}, ${lng})로 좌표가 설정되었습니다.`);
+      },
+      (error) => {
+        setIsGpsLocating(false);
+        let errMsg = 'GPS 위치를 가져오지 못했습니다.';
+        if (error.code === 1) {
+          errMsg = '위치 권한이 거부되었습니다. 브라우저/스마트폰 위치 접근을 허용해주세요.';
+        } else if (error.code === 2) {
+          errMsg = '현재 GPS 위치 신호를 확인할 수 없습니다.';
+        } else if (error.code === 3) {
+          errMsg = 'GPS 응답 시간이 초과되었습니다. 다시 시도해주세요.';
+        }
+        setGpsStatusMsg(errMsg);
+        showToast(errMsg);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
+  };
+
+  const handlePickerSearch = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!pickerSearchKeyword.trim()) {
+      showToast('검색할 건물명, 역명 또는 도로명 주소를 입력해주세요.');
+      return;
+    }
+    try {
+      setIsSearchingPlaces(true);
+      const results = await searchKakaoPlaces(pickerSearchKeyword.trim(), pickerLat, pickerLng);
+      setPickerSearchResults(results || []);
+      if (results && results.length > 0) {
+        const first = results[0];
+        setPickerLat(first.lat);
+        setPickerLng(first.lon);
+        setPickerMapCenter({ lat: first.lat, lng: first.lon });
+        setPickerAddress(first.address || first.name);
+        showToast(`'${first.name}' 검색 위치로 이동했습니다.`);
+      } else {
+        showToast('검색 결과가 없습니다. 지도를 직접 클릭하여 위치를 선택해보세요.');
+      }
+    } catch (err) {
+      console.error('장소 검색 오류:', err);
+      showToast('장소 검색 중 오류가 발생했습니다.');
+    } finally {
+      setIsSearchingPlaces(false);
+    }
+  };
+
+  const handleSelectSearchResult = (item) => {
+    setPickerLat(item.lat);
+    setPickerLng(item.lon);
+    setPickerMapCenter({ lat: item.lat, lng: item.lon });
+    setPickerAddress(item.address || item.name);
+    showToast(`'${item.name}' 위치로 핀을 이동했습니다.`);
+  };
+
+  const handleConfirmLocationPicker = () => {
+    const latStr = Number(pickerLat).toFixed(6);
+    const lngStr = Number(pickerLng).toFixed(6);
+
+    if (locationPickerTarget === 'zone') {
+      setNewZoneLat(latStr);
+      setNewZoneLng(lngStr);
+      if (pickerAddress) {
+        setNewZoneAddress(pickerAddress);
+      }
+    } else if (locationPickerTarget === 'editZone') {
+      setEditingZone(prev => prev ? {
+        ...prev,
+        latitude: latStr,
+        longitude: lngStr,
+        lat: latStr,
+        lng: lngStr,
+        address: pickerAddress || prev.address
+      } : prev);
+    } else {
+      // restroom
+      setNewRestroomLat(latStr);
+      setNewRestroomLng(lngStr);
+      setNewZoneLat(latStr);
+      setNewZoneLng(lngStr);
+    }
+
+    setIsLocationPickerOpen(false);
+    showToast(`선택된 위치(${latStr}, ${lngStr})로 좌표가 설정되었습니다.`);
+  };
+
+  const handleToggleSensorStatus = async (sensor) => {
+    const nextStatus = sensor.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+    try {
+      await updateBackendSensorApi(sensor.sensorId, { status: nextStatus });
+      const updatedSensors = await fetchSensorsApi();
+      setSensorsList(updatedSensors);
+      showToast(`센서 #${sensor.sensorId} 상태가 [${nextStatus}]로 변경되었습니다.`);
+    } catch (err) {
+      showToast(`센서 상태 변경 실패: ${err.message}`);
+    }
+  };
+
+  const handleDeleteSensorItem = async (sensor) => {
+    if (!window.confirm(`센서 #${sensor.sensorId} (${sensor.sensorType})를 데이터베이스에서 삭제하시겠습니까?`)) return;
+    try {
+      setDataLoading(true);
+      await deleteBackendSensorApi(sensor.sensorId);
+      setSensorsList(prev => prev.filter(s => s.sensorId !== sensor.sensorId));
+      showToast(`센서 #${sensor.sensorId}가 삭제되었습니다.`);
+    } catch (err) {
+      showToast(`센서 삭제 실패: ${err.message}`);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  const handleSaveUserForm = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!userForm.username.trim()) {
+      showToast('계정 아이디(username)를 입력해주세요.');
+      return;
+    }
+    try {
+      setDataLoading(true);
+      if (editingUserId) {
+        await updateUserApi(editingUserId, {
+          username: userForm.username.trim(),
+          password: userForm.password || undefined,
+          role: userForm.role,
+          zoneIds: userForm.zoneIds.map(Number)
+        });
+        showToast(`계정 [${userForm.username}] 및 담당 구역 권한이 수정되었습니다.`);
+      } else {
+        await createUserApi({
+          username: userForm.username.trim(),
+          password: userForm.password,
+          role: userForm.role,
+          zoneIds: userForm.zoneIds.map(Number)
+        });
+        showToast(`신규 계정 [${userForm.username}]이 생성되었습니다.`);
+      }
+      setEditingUserId(null);
+      setUserForm({ username: '', password: '', role: 'CLEANER', zoneIds: [] });
+      const latestUsers = await fetchUsersApi();
+      setUsersList(latestUsers);
+    } catch (err) {
+      showToast(`계정 저장 실패: ${err.message}`);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  const handleEditUserClick = (u) => {
+    setEditingUserId(u.id);
+    setUserForm({
+      username: u.username || '',
+      password: '',
+      role: u.role || 'CLEANER',
+      zoneIds: Array.isArray(u.zoneIds) ? u.zoneIds.map(Number) : []
+    });
+  };
+
+  const handleDeleteUserItem = async (u) => {
+    if (!window.confirm(`계정 [${u.username}]을 삭제하시겠습니까? 연결된 구역 권한도 함께 정리됩니다.`)) return;
+    try {
+      setDataLoading(true);
+      await deleteUserApi(u.id);
+      setUsersList(prev => prev.filter(item => item.id !== u.id));
+      showToast(`계정 [${u.username}]이 삭제되었습니다.`);
+    } catch (err) {
+      showToast(`계정 삭제 실패: ${err.message}`);
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  const historyTimes = historyPoints.map(point => parseUtcDate(point.measuredAt)?.getTime() || new Date(point.measuredAt).getTime());
   const historySpan = historyTimes.length > 1 ? historyTimes[historyTimes.length - 1] - historyTimes[0] : 0;
   // 눈금이 6개 이하가 되는 가장 촘촘한 '딱 떨어지는' 간격(분)을 고릅니다.
   const tickStepMinutes = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440].find(m => historySpan / (m * 60000) <= 6) ?? 1440;
@@ -1469,15 +2080,23 @@ export default function AdminPage() {
         </div>
         {/* Chart.js가 창 크기 변화를 따라가려면 컨테이너가 relative여야 합니다. */}
         <div style={{ position: 'relative', height: '280px', width: '100%', minWidth: 0 }}>
-          <Line data={generateChartData()} options={chartOptions} />
+          {historyPoints && historyPoints.length > 0 ? (
+            <Line data={generateChartData()} options={chartOptions} />
+          ) : (
+            <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#94a3b8', fontSize: '13px' }}>
+              <IconWind size={24} style={{ marginBottom: '8px' }} />
+              <span>실시간 센서 측정 이력 데이터 수집 대기 중</span>
+              <span style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '4px' }}>IoT 하드웨어 기기에서 센서 데이터가 수집되면 실시간 시계열 추이 차트가 자동으로 표시됩니다.</span>
+            </div>
+          )}
         </div>
       </div>
     );
   };
 
-  const confirmAccessibleAlerts = () => {
-    setAlerts(prev => prev.map(a => accessibleAlerts.some(acc => acc.id === a.id) ? { ...a, isChecked: true } : a));
-    showToast('담당 구역 알림이 일괄 확인되었습니다.');
+  const confirmAccessibleAlerts = async () => {
+    try {await resolveAllAlertsApi('담당 구역 알림 일괄 확인');setAlerts(prev=>prev.map(row=>accessibleAlerts.some(a=>a.id===row.id)?{...row,isChecked:true}:row));showToast('담당 구역 알림 조치가 저장되었습니다.');}
+    catch(error){showToast(`알림 일괄 조치 실패: ${error.message}`);}
   };
 
   const renderAlertPanel = () => (
@@ -1517,41 +2136,137 @@ export default function AdminPage() {
     </div>
   );
 
+  const renderZoneWorkerSelect = (r, compact = false, fullWidth = false) => {
+    const matchedWorker = workers.find(w =>
+      (r.assignedWorkerId != null && Number(w.id) === Number(r.assignedWorkerId)) ||
+      (w.assignedZoneId != null && Number(w.assignedZoneId) === Number(r.id)) ||
+      (r.cleanWorker && r.cleanWorker !== '담당자 미지정' && w.name === r.cleanWorker)
+    );
+    const currentVal = matchedWorker ? String(matchedWorker.id) : '';
+    const isUnassigned = !currentVal && (!r.cleanWorker || r.cleanWorker === '담당자 미지정');
+
+    return (
+      <select
+        className={fullWidth ? 'cleaning-worker-select' : undefined}
+        value={currentVal}
+        onClick={e => e.stopPropagation()}
+        onChange={e => {
+          e.stopPropagation();
+          handleAssignWorkerToZone(r.id, e.target.value);
+        }}
+        title="클릭하여 담당 청소관리인 지정/변경"
+        style={{
+          padding: compact ? '4px 8px' : '5px 10px',
+          fontSize: '12px',
+          fontWeight: '600',
+          borderRadius: '6px',
+          border: isUnassigned ? '1px solid #fca5a5' : '1px solid #cbd5e1',
+          backgroundColor: isUnassigned ? '#fef2f2' : '#ffffff',
+          color: isUnassigned ? '#dc2626' : '#0f172a',
+          cursor: 'pointer',
+          ...(fullWidth ? { flex: 1, minWidth: 0 } : { maxWidth: compact ? '160px' : '180px' }),
+          outline: 'none'
+        }}
+      >
+        <option value="">
+          {isUnassigned ? '⚠️ 담당자 미지정 (선택)' : `담당 해제 (${r.cleanWorker})`}
+        </option>
+        {workers.map(w => (
+          <option key={w.id} value={w.id}>
+            👤 {w.name} ({w.role ? w.role.split(' ')[0] : '미화'})
+          </option>
+        ))}
+      </select>
+    );
+  };
+
   const renderCleaningPanel = () => (
-    <div style={styles.panelCard}>
-      <div style={styles.panelHeader}>
+    <div className="cleaning-panel-card" style={styles.panelCard}>
+      <div className="cleaning-panel-header">
         <h3 style={styles.panelTitle}>구역별 청소 현황</h3>
-        <button onClick={() => setActiveTab('cleaning')} style={styles.panelLink}>전체 보기 &rarr;</button>
+        <div className="cleaning-panel-header-actions">
+          <button
+            type="button"
+            onClick={() => setIsWorkerModalOpen(true)}
+            style={{
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontWeight: '600',
+              color: '#2563eb',
+              backgroundColor: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            + 청소관리인 등록/관리
+          </button>
+          <button onClick={() => setActiveTab('cleaning')} style={styles.panelLink}>전체 보기 &rarr;</button>
+        </div>
       </div>
       {accessibleRestrooms.length === 0 ? (
         <div style={styles.panelEmpty}>담당 구역이 없습니다.</div>
       ) : (
         <div style={styles.cleaningList}>
           {accessibleRestrooms.map(r => {
-            const isOver = r.lastCleanedHours >= systemSettings.cleanWarnHours;
+            const isOver = r.lastCleanedHours >= appliedSettings.cleanWarnHours;
             return (
               <div
                 key={r.id}
+                className="cleaning-panel-item"
                 onClick={() => {
                   setSelectedRestroom(r);
                   openQuickCleaningModal(r);
                 }}
-                title="클릭하여 즉시 청소 등록 모달 열기"
-                style={{ ...styles.cleaningRow, cursor: 'pointer' }}
+                title="행 클릭 시 즉시 청소 등록 · 드롭다운에서 담당자 바로 지정"
+                style={{ cursor: 'pointer' }}
               >
-                <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <span style={styles.cleaningName}>{r.name}</span>
-                  <span style={{ fontSize: '12px', color: '#64748b', marginLeft: '6px' }}>({r.cleanWorker})</span>
-                </div>
-                <span style={{ fontSize: '12px', fontWeight: '500', color: isOver ? '#991b1b' : '#64748b', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                  {isOver ? (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                      <IconAlertCircle size={12} /> {r.lastCleanedHours}h 지연
+                <div className="cleaning-panel-item-top">
+                  <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span
+                      title={r.name}
+                      style={{
+                        ...styles.cleaningName,
+                        fontWeight: '600',
+                        color: '#0f172a',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {r.name}
                     </span>
-                  ) : (
-                    r.lastCleanedHours == null ? '기록 없음' : `${r.lastCleanedHours}h 전`
-                  )}
-                </span>
+                    <span style={{ fontSize: '11px', color: '#64748b', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                      {r.floor}
+                    </span>
+                  </div>
+                  <span style={{
+                    fontSize: '11px',
+                    fontWeight: '600',
+                    color: isOver ? '#dc2626' : '#64748b',
+                    backgroundColor: isOver ? '#fef2f2' : '#ffffff',
+                    border: `1px solid ${isOver ? '#fecaca' : '#e2e8f0'}`,
+                    padding: '2px 7px',
+                    borderRadius: '999px',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0
+                  }}>
+                    {isOver ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                        <IconAlertCircle size={11} /> {r.lastCleanedHours}h 지연
+                      </span>
+                    ) : (
+                      r.lastCleanedHours == null ? '기록 없음' : `${r.lastCleanedHours}h 전`
+                    )}
+                  </span>
+                </div>
+                <div className="cleaning-panel-item-bottom" onClick={e => e.stopPropagation()}>
+                  <span style={{ fontSize: '11px', fontWeight: '500', color: '#64748b', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                    담당 관리인
+                  </span>
+                  {renderZoneWorkerSelect(r, true, true)}
+                </div>
               </div>
             );
           })}
@@ -1562,14 +2277,14 @@ export default function AdminPage() {
 
   // --- [청소 담당자 전용 대시보드 화면] ---
   const renderCleanerDashboard = () => {
-    const delayedCount = accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours).length;
+    const delayedCount = accessibleRestrooms.filter(r => r.lastCleanedHours >= appliedSettings.cleanWarnHours).length;
     const checklistCompleted = Object.values(cleanChecklist).filter(Boolean).length;
     const checklistTotal = Object.keys(cleanChecklist).length;
     const checklistPercent = Math.round((checklistCompleted / checklistTotal) * 100);
 
     // 청소 담당자는 카드에서 바로 작업을 기록합니다. (버튼 모양은 다른 역할과 같은 공통 버튼)
     const cleanerFooter = (item) => {
-      const isOver = item.lastCleanedHours >= systemSettings.cleanWarnHours;
+      const isOver = item.lastCleanedHours >= appliedSettings.cleanWarnHours;
       const cleaningText = isOver
         ? `청소 ${item.lastCleanedHours}시간 경과 (기준 초과)`
         : item.lastCleanedHours == null ? '청소 기록 없음' : `청소 ${item.lastCleanedHours}시간 전 · ${item.cleanWorker}`;
@@ -1613,11 +2328,11 @@ export default function AdminPage() {
         <div style={styles.summaryGrid}>
           {renderSummaryCard({ label: '내 담당 구역', value: accessibleRestrooms.length, filter: 'ALL' })}
           {renderSummaryCard({
-            label: `즉시 청소 필요 (${systemSettings.cleanWarnHours}시간 초과)`,
+            label: `즉시 청소 필요 (${appliedSettings.cleanWarnHours}시간 초과)`,
             value: delayedCount,
             color: delayedCount > 0 ? '#dc2626' : '#0f172a',
             onClick: () => {
-              const delayedR = accessibleRestrooms.find(r => r.lastCleanedHours >= systemSettings.cleanWarnHours);
+              const delayedR = accessibleRestrooms.find(r => r.lastCleanedHours >= appliedSettings.cleanWarnHours);
               if (delayedR) {
                 setSelectedRestroom(delayedR);
                 openQuickCleaningModal(delayedR);
@@ -1633,15 +2348,13 @@ export default function AdminPage() {
             color: checklistPercent === 100 ? '#059669' : '#0f172a',
             onClick: () => {
               const allChecked = checklistCompleted === checklistTotal;
-              const nextState = !allChecked;
-              setCleanChecklist({ floor: nextState, sink: nextState, toilet: nextState, soap: nextState, trash: nextState, vent: nextState });
-              showToast(nextState ? '위생 점검 6개 항목이 전체 선택되었습니다.' : '위생 점검 체크리스트가 초기화되었습니다.');
+              handleBatchToggleChecklist(!allChecked);
             }
           })}
           {renderSummaryCard({ label: '미확인 알림', value: uncheckedAlerts, color: uncheckedAlerts > 0 ? '#d97706' : '#0f172a', onClick: () => setActiveTab('alerts') })}
         </div>
 
-        <div style={styles.dashboardBody}>
+        <div className="admin-dashboard-body" style={styles.dashboardBody}>
           <div style={styles.leftCol}>
             {renderRestroomGrid(accessibleRestrooms, cleanerFooter, { minCardWidth: 280, selectable: true })}
           </div>
@@ -1704,7 +2417,7 @@ export default function AdminPage() {
               <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
                 <button
                   type="button"
-                  onClick={() => setCleanChecklist({ floor: true, sink: true, toilet: true, soap: true, trash: true, vent: true })}
+                  onClick={() => handleBatchToggleChecklist(true)}
                   style={{ ...styles.secondaryBtn, flex: 1, padding: '6px 8px', fontSize: '11px' }}
                 >
                   전체 체크
@@ -1731,42 +2444,39 @@ export default function AdminPage() {
 
   // --- [현장 관리자 전용 대시보드 화면] ---
   const renderAdminDashboard = () => {
-    const delayedCount = accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours).length;
+    const delayedCount = accessibleRestrooms.filter(r => r.lastCleanedHours >= appliedSettings.cleanWarnHours).length;
 
     // 카드 하단 깨짐 방지를 위해 2단 컬럼 레이아웃으로 정돈
     const adminFooter = (item) => {
-      const isOver = item.lastCleanedHours >= systemSettings.cleanWarnHours;
+      const isOver = item.lastCleanedHours >= appliedSettings.cleanWarnHours;
       return (
         <div style={{ ...styles.cardFooter, flexDirection: 'column', alignItems: 'stretch', gap: '8px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-            <span style={{
-              fontSize: '12px',
-              color: isOver ? '#b91c1c' : '#475569',
-              fontWeight: isOver ? '600' : '500',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              whiteSpace: 'nowrap',
-              flexShrink: 0
-            }}>
-              {isOver ? (
-                <>
-                  <IconAlertCircle size={12} color="#b91c1c" />
-                  <span>청소 {item.lastCleanedHours}시간 경과</span>
-                </>
-              ) : (
-                <span>청소 {item.lastCleanedHours == null ? '기록 없음' : `${item.lastCleanedHours}시간 전`}</span>
-              )}
-            </span>
-            <span style={{
-              fontSize: '11px',
-              color: '#64748b',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis'
-            }}>
-              담당 {item.cleanWorker}
-            </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '11px', color: '#64748b', fontWeight: '500' }}>최근 청소</span>
+              <span style={{
+                fontSize: '12px',
+                color: isOver ? '#b91c1c' : '#334155',
+                fontWeight: isOver ? '700' : '600',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                whiteSpace: 'nowrap'
+              }}>
+                {isOver ? (
+                  <>
+                    <IconAlertCircle size={12} color="#b91c1c" />
+                    <span>{item.lastCleanedHours}시간 경과</span>
+                  </>
+                ) : (
+                  <span>{item.lastCleanedHours == null ? '기록 없음' : `${item.lastCleanedHours}시간 전`}</span>
+                )}
+              </span>
+            </div>
+            <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+              <span style={{ fontSize: '11px', color: '#64748b', fontWeight: '500', flexShrink: 0 }}>담당자</span>
+              {renderZoneWorkerSelect(item, true, true)}
+            </div>
           </div>
 
           <div style={{ display: 'flex', gap: '6px', width: '100%' }}>
@@ -1803,6 +2513,12 @@ export default function AdminPage() {
           <><IconRoleAdmin size={15} color="#2563eb" /> 현장 관리자 운영 컨트롤</>,
           <>
             <button
+              onClick={() => setIsWorkerModalOpen(true)}
+              style={{ ...styles.secondaryBtn, borderColor: '#3b82f6', color: '#1d4ed8', backgroundColor: '#eff6ff' }}
+            >
+              <IconUsers size={13} /> 청소관리인 등록/배정
+            </button>
+            <button
               onClick={() => handleOpenDispatchModal('ALL_DELAYED')}
               style={{ ...styles.primaryBtn, backgroundColor: delayedCount > 0 ? '#dc2626' : '#2563eb' }}
             >
@@ -1828,7 +2544,7 @@ export default function AdminPage() {
           {renderSummaryCard({ label: '정상 수신', value: normalCount, filter: 'RECEIVING' })}
           {renderSummaryCard({ label: '주의/위험', value: warnCount + dangerCount, color: warnCount + dangerCount > 0 ? '#dc2626' : '#0f172a', filter: 'ALERTING' })}
           {renderSummaryCard({
-            label: `청소 지연 (${systemSettings.cleanWarnHours}시간 초과)`,
+            label: `청소 지연 (${appliedSettings.cleanWarnHours}시간 초과)`,
             value: delayedCount,
             color: delayedCount > 0 ? '#dc2626' : '#0f172a',
             onClick: () => handleOpenDispatchModal('ALL_DELAYED'),
@@ -1840,7 +2556,7 @@ export default function AdminPage() {
         {renderFilterBar()}
 
         {/* 중앙 2열: 카드 그리드 / 우측 패널 */}
-        <div style={styles.dashboardBody}>
+        <div className="admin-dashboard-body" style={styles.dashboardBody}>
           <div style={styles.leftCol}>
             {renderRestroomGrid(filteredRestrooms, adminFooter)}
           </div>
@@ -1890,20 +2606,8 @@ export default function AdminPage() {
             <button onClick={() => setIsAddRestroomModalOpen(true)} style={{ ...styles.primaryBtn, backgroundColor: '#4f46e5' }}>
               <IconPlus /> 신규 노드 등록
             </button>
-            <button onClick={handleSimulatePacket} style={styles.secondaryBtn}>
-              <IconCpu size={13} /> 모의 패킷 수신
-            </button>
             <button onClick={handlePingAllSensors} style={styles.secondaryBtn}>
               <IconRefresh size={13} /> 연결 확인
-            </button>
-            <button
-              onClick={() => {
-                navigator.clipboard?.writeText(systemSettings.deviceKey);
-                showToast(`기기 인증키 복사됨: ${systemSettings.deviceKey}`);
-              }}
-              style={styles.secondaryBtn}
-            >
-              <IconKey size={13} /> 장치 키 복사
             </button>
             <button
               onClick={() => {
@@ -1928,7 +2632,7 @@ export default function AdminPage() {
         {renderFilterBar()}
 
         {/* 중앙 2열: IoT 노드 그리드 / 우측 패킷 로그 */}
-        <div style={styles.dashboardBody}>
+        <div className="admin-dashboard-body" style={styles.dashboardBody}>
           <div style={styles.leftCol}>
             {renderRestroomGrid(filteredRestrooms, developerFooter, { sub: item => `장치 ${item.deviceId}` })}
           </div>
@@ -1974,6 +2678,74 @@ export default function AdminPage() {
             </div>
 
             {renderAlertPanel()}
+
+            {/* 개발자 전용: IoT 노드 및 기기 세트 연결 현황 */}
+            <div style={styles.panelCard}>
+              <div style={styles.panelHeader}>
+                <h3 style={{ ...styles.panelTitle, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <IconCpu size={14} color="#2563eb" /> IoT 노드 연결 현황
+                </h3>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>
+                  등록 노드 {restrooms.length}개
+                </span>
+              </div>
+              {restrooms.length === 0 ? (
+                <div style={styles.panelEmpty}>등록된 IoT 노드가 없습니다.</div>
+              ) : (
+                <div style={{ ...styles.alertList, maxHeight: '280px', overflowY: 'auto' }}>
+                  {restrooms.map(item => {
+                    const isSelected = selectedRestroom?.id === item.id;
+                    const st = statusStyle(item.status);
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => setSelectedRestroom(item)}
+                        style={{
+                          ...styles.alertItem,
+                          cursor: 'pointer',
+                          backgroundColor: isSelected ? '#eff6ff' : '#ffffff',
+                          border: `1px solid ${isSelected ? '#93c5fd' : '#e2e8f0'}`,
+                          borderRadius: '6px',
+                          padding: '8px 10px',
+                          transition: 'all 0.15s ease'
+                        }}
+                        title="클릭 시 하단 실시간 시계열 추이 차트 조회"
+                      >
+                        <div style={styles.alertTop}>
+                          <span style={{ ...styles.alertRestroom, fontWeight: '600', color: '#0f172a', fontSize: '12px' }}>
+                            {item.name}
+                          </span>
+                          <span style={{
+                            ...styles.statusPillSmall,
+                            backgroundColor: st.bg,
+                            color: st.text,
+                            border: `1px solid ${st.border}`
+                          }}>
+                            <span style={{ ...styles.pillDot, backgroundColor: st.dot }} />
+                            {st.label}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', fontSize: '11px' }}>
+                          <span style={{ fontFamily: MONO_FONT, color: '#475569', fontSize: '11px' }}>
+                            MAC: {item.deviceId || '미등록'}
+                          </span>
+                          <span style={{
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                            backgroundColor: item.ingestSource === 'direct_api' ? '#ecfdf5' : '#f1f5f9',
+                            color: item.ingestSource === 'direct_api' ? '#059669' : '#475569'
+                          }}>
+                            {item.ingestSource === 'direct_api' ? 'Direct API' : 'MySQL/Upstash'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </aside>
         </div>
 
@@ -1981,6 +2753,262 @@ export default function AdminPage() {
       </div>
     );
   };
+
+  // --- [청소관리인(미화 인원) 등록 및 구역 배정 관리 공통 UI] ---
+  const renderWorkerManagementSection = () => (
+    <div className="admin-worker-grid">
+      {/* 좌측: 청소관리인 신규 등록 / 수정 폼 */}
+      <div style={styles.panelCard}>
+        <div style={{ borderBottom: '1px solid #f1f5f9', paddingBottom: '10px', marginBottom: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#0f172a' }}>
+              {editingWorkerId ? '✏️ 청소관리인 정보 수정' : '➕ 신규 청소관리인 등록'}
+            </h3>
+            <span style={{ fontSize: '11px', color: '#64748b' }}>
+              미화 담당 인원을 등록하고 담당 구역을 지정합니다.
+            </span>
+          </div>
+          {editingWorkerId && (
+            <button
+              type="button"
+              onClick={handleResetWorkerForm}
+              style={{ ...styles.actionBtnSmall, color: '#64748b' }}
+            >
+              신규 전환
+            </button>
+          )}
+        </div>
+
+        <form onSubmit={handleSaveWorkerForm}>
+          <div style={styles.formGroup}>
+            <label style={styles.formLabel}>성명 (필수)</label>
+            <input
+              type="text"
+              required
+              placeholder="예: 홍길동"
+              value={workerFormName}
+              onChange={e => setWorkerFormName(e.target.value)}
+              style={styles.formInput}
+            />
+          </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.formLabel}>연락처</label>
+            <input
+              type="text"
+              placeholder="예: 010-1234-5678"
+              value={workerFormPhone}
+              onChange={e => setWorkerFormPhone(e.target.value)}
+              style={styles.formInput}
+            />
+          </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.formLabel}>소속 팀 / 담당 직무</label>
+            <input
+              type="text"
+              placeholder="예: 환경미화 1팀 (1층 전담)"
+              value={workerFormRole}
+              onChange={e => setWorkerFormRole(e.target.value)}
+              style={styles.formInput}
+            />
+          </div>
+
+          <div className="worker-form-dual-row">
+            <div style={styles.formGroup}>
+              <label style={styles.formLabel}>담당 구역 배정</label>
+              <select
+                value={workerFormZoneId}
+                onChange={e => setWorkerFormZoneId(e.target.value)}
+                style={styles.formSelect}
+              >
+                <option value="">-- 구역 미지정 --</option>
+                {restrooms.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.floor})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div style={styles.formGroup}>
+              <label style={styles.formLabel}>근무 상태</label>
+              <select
+                value={workerFormStatus}
+                onChange={e => setWorkerFormStatus(e.target.value)}
+                style={styles.formSelect}
+              >
+                <option value="AVAILABLE">대기 중 (출동 가능)</option>
+                <option value="DISPATCHED">현장 작업 중</option>
+                <option value="OFF_DUTY">휴무 / 비번</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+            {editingWorkerId && (
+              <button
+                type="button"
+                onClick={handleResetWorkerForm}
+                style={{ ...styles.secondaryBtn, flex: 1, justifyContent: 'center' }}
+              >
+                취소
+              </button>
+            )}
+            <button
+              type="submit"
+              style={{
+                ...styles.cleanBtnSubmit,
+                flex: 2,
+                backgroundColor: editingWorkerId ? '#2563eb' : '#0f172a'
+              }}
+            >
+              {editingWorkerId ? '청소관리인 수정 저장' : '+ 청소관리인 등록 완료'}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* 우측: 등록된 청소관리인 목록 및 구역 배정·상태 관리 테이블 */}
+      <div style={styles.panelCard}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#0f172a' }}>
+              등록된 청소관리인 명단 및 구역 배정 현황
+            </h3>
+            <span style={{ fontSize: '11px', color: '#64748b' }}>
+              총 {workers.length}명 등록됨 &middot; 드롭다운에서 담당 구역과 근무 상태를 즉시 변경할 수 있습니다.
+            </span>
+          </div>
+        </div>
+
+        <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          <table style={{ ...styles.table, minWidth: '720px' }}>
+            <thead>
+              <tr style={styles.thRow}>
+                <th style={{ ...styles.th, width: '100px', whiteSpace: 'nowrap' }}>성명</th>
+                <th style={{ ...styles.th, width: '125px', whiteSpace: 'nowrap' }}>연락처</th>
+                <th style={{ ...styles.th, minWidth: '130px', whiteSpace: 'nowrap' }}>소속 / 직무</th>
+                <th style={{ ...styles.th, minWidth: '190px', whiteSpace: 'nowrap' }}>담당 구역 지정</th>
+                <th style={{ ...styles.th, width: '150px', whiteSpace: 'nowrap' }}>근무 상태</th>
+                <th style={{ ...styles.th, width: '90px', textAlign: 'center', whiteSpace: 'nowrap' }}>관리</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workers.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '32px', color: '#64748b', fontSize: '13px' }}>
+                    등록된 청소관리인이 없습니다. 좌측 폼에서 신규 청소관리인을 등록해주세요.
+                  </td>
+                </tr>
+              ) : (
+                workers.map(w => {
+                  const assignedZone = restrooms.find(r =>
+                    (w.assignedZoneId != null && Number(r.id) === Number(w.assignedZoneId)) ||
+                    (r.assignedWorkerId != null && Number(r.assignedWorkerId) === Number(w.id))
+                  );
+                  return (
+                    <tr key={w.id} style={styles.tr}>
+                      <td style={{ ...styles.td, fontWeight: '700', color: '#0f172a', whiteSpace: 'nowrap' }}>
+                        👤 {w.name}
+                      </td>
+                      <td style={{ ...styles.td, fontFamily: MONO_FONT, fontSize: '12px', whiteSpace: 'nowrap' }}>
+                        {w.phone || '—'}
+                      </td>
+                      <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{w.role || '위생관리팀'}</td>
+                      <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
+                        <select
+                          value={assignedZone ? String(assignedZone.id) : (w.assignedZoneId ? String(w.assignedZoneId) : '')}
+                          onChange={async (e) => {
+                            const nextZoneId = e.target.value ? Number(e.target.value) : null;
+                            if (nextZoneId) {
+                              await handleAssignWorkerToZone(nextZoneId, w.id);
+                            } else {
+                              // 배정 해제
+                              const prevZoneId = assignedZone?.id || w.assignedZoneId;
+                              if (prevZoneId) {
+                                await handleAssignWorkerToZone(prevZoneId, '');
+                              }
+                              await updateWorkerApi(w.id, {
+                                name: w.name,
+                                phone: w.phone || '',
+                                role: w.role || 'CLEANER',
+                                status: w.status || 'AVAILABLE',
+                                assignedZoneId: null
+                              }).catch(() => {});
+                              const fresh = await fetchWorkersApi();
+                              if (fresh) setWorkers(fresh);
+                            }
+                          }}
+                          style={{
+                            padding: '4px 8px',
+                            fontSize: '12px',
+                            fontWeight: '600',
+                            borderRadius: '4px',
+                            border: assignedZone ? '1px solid #bfdbfe' : '1px solid #cbd5e1',
+                            backgroundColor: assignedZone ? '#eff6ff' : '#ffffff',
+                            color: assignedZone ? '#1d4ed8' : '#64748b',
+                            cursor: 'pointer',
+                            maxWidth: '220px',
+                            width: '100%'
+                          }}
+                        >
+                          <option value="">미배정 (구역 선택)</option>
+                          {restrooms.map(r => (
+                            <option key={r.id} value={r.id}>
+                              {r.name} ({r.floor})
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
+                        <select
+                          value={w.status || 'AVAILABLE'}
+                          onChange={e => handleChangeWorkerStatus(w.id, e.target.value)}
+                          style={{
+                            padding: '4px 8px',
+                            fontSize: '11px',
+                            fontWeight: '600',
+                            borderRadius: '999px',
+                            border: w.status === 'AVAILABLE' ? '1px solid #bbf7d0' : w.status === 'DISPATCHED' ? '1px solid #fde68a' : '1px solid #cbd5e1',
+                            backgroundColor: w.status === 'AVAILABLE' ? '#f0fdf4' : w.status === 'DISPATCHED' ? '#fffbeb' : '#f1f5f9',
+                            color: w.status === 'AVAILABLE' ? '#166534' : w.status === 'DISPATCHED' ? '#b45309' : '#64748b',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <option value="AVAILABLE">● 대기 중 (출동 가능)</option>
+                          <option value="DISPATCHED">● 현장 작업 중</option>
+                          <option value="OFF_DUTY">○ 휴무 / 비번</option>
+                        </select>
+                      </td>
+                      <td style={{ ...styles.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'inline-flex', gap: '6px', whiteSpace: 'nowrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => handleEditWorkerClick(w)}
+                            style={{ ...styles.actionBtnSmall, color: '#2563eb' }}
+                          >
+                            수정
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteWorker(w)}
+                            style={{ ...styles.actionBtnSmall, color: '#dc2626' }}
+                          >
+                            삭제
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div style={styles.container}>
@@ -2026,12 +3054,50 @@ export default function AdminPage() {
                 style={{ ...styles.navItem, ...(activeTab === 'settings' ? styles.navItemActive : {}) }}
               >
                 <IconSettings /> 설정
+                {user?.role !== ROLES.CLEANER && discoveredDevices && discoveredDevices.length > 0 && (
+                  <span style={{
+                    marginLeft: '6px',
+                    padding: '1px 6px',
+                    fontSize: '10px',
+                    fontWeight: '700',
+                    borderRadius: '10px',
+                    backgroundColor: '#f59e0b',
+                    color: '#ffffff'
+                  }}>
+                    {discoveredDevices.length}
+                  </span>
+                )}
               </button>
             )}
           </nav>
         </div>
 
         <div style={styles.headerRight}>
+          {user?.role !== ROLES.CLEANER && discoveredDevices && discoveredDevices.length > 0 && (
+            <button
+              onClick={() => {
+                setActiveTab('settings');
+                setSettingsSubTab('restrooms');
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '4px 10px',
+                backgroundColor: '#fef3c7',
+                color: '#92400e',
+                border: '1px solid #fcd34d',
+                borderRadius: '16px',
+                fontSize: '11px',
+                fontWeight: '700',
+                cursor: 'pointer'
+              }}
+              title="미등록 IoT 기기가 감지되었습니다. 클릭하여 등록하기"
+            >
+              <span>📡 새 기기 {discoveredDevices.length}대 감지</span>
+            </button>
+          )}
+
           <button
             onClick={handleManualRefresh}
             style={{ ...styles.logoutBtn, padding: '4px 8px', fontSize: '11px' }}
@@ -2039,40 +3105,6 @@ export default function AdminPage() {
           >
             <IconRefresh size={11} /> 갱신 {lastUpdatedTime}
           </button>
-
-          {/* 역할 빠른 전환 스위치 (개발자 / 현장 관리자 / 청소 담당자) */}
-          <div style={{ display: 'inline-flex', backgroundColor: '#f1f5f9', padding: '2px', borderRadius: '6px', border: '1px solid #e2e8f0', gap: '2px' }}>
-            {[
-              { role: ROLES.DEVELOPER, label: '개발자' },
-              { role: ROLES.ADMIN, label: '관리자' },
-              { role: ROLES.CLEANER, label: '청소담당' }
-            ].map(rBtn => {
-              const active = user?.role === rBtn.role;
-              return (
-                <button
-                  key={rBtn.role}
-                  onClick={() => {
-                    switchRole?.(rBtn.role);
-                    showToast(`[${rBtn.label}] 권한 화면으로 전환되었습니다.`);
-                  }}
-                  style={{
-                    border: 'none',
-                    borderRadius: '4px',
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    fontWeight: active ? '700' : '500',
-                    cursor: 'pointer',
-                    backgroundColor: active ? '#ffffff' : 'transparent',
-                    color: active ? '#0f172a' : '#64748b',
-                    boxShadow: active ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
-                    whiteSpace: 'nowrap'
-                  }}
-                >
-                  {rBtn.label}
-                </button>
-              );
-            })}
-          </div>
 
           <span style={{
             display: 'inline-flex',
@@ -2096,9 +3128,19 @@ export default function AdminPage() {
         </div>
       </header>
 
+      {issuedCredential && (
+        <div role="dialog" aria-modal="true" aria-label="장치 인증 키" style={{position:'fixed',inset:0,zIndex:9999,background:'#0008',display:'grid',placeItems:'center'}}>
+          <div style={{background:'white',padding:24,borderRadius:12,maxWidth:600}}>
+            <h3>{issuedCredential.macAddress} 인증 키</h3><p>이 키는 지금 한 번만 표시됩니다. 해당 장치의 설정 포털에 저장하세요.</p>
+            <code style={{overflowWrap:'anywhere'}}>{issuedCredential.key}</code>
+            <div><button onClick={async()=>{try{await navigator.clipboard.writeText(issuedCredential.key);showToast('인증 키를 복사했습니다.');}catch{showToast('복사하지 못했습니다. 키를 직접 선택해주세요.');}}}>복사</button>
+            <button onClick={()=>setIssuedCredential(null)}>닫기</button></div>
+          </div>
+        </div>
+      )}
       {/* 토스트 알림 */}
       <section className="sensor-data-toolbar">
-        <SensorDataStatus loading={dataLoading} />
+        <SensorDataStatus loading={dataLoading} intervalSeconds={appliedSettings.refreshSeconds} />
         <p title={`${selectedRestroom?.ingestSource === 'direct_api' ? 'ESP32 Wi-Fi → 백엔드 → MySQL' : 'MySQL에 보관한 ESP32 실측값'} · MQ-135는 보정 전 ADC 값 · 마지막 측정 ${selectedRestroom?.lastUpdated || '확인 중'}`}>{selectedRestroom?.ingestSource === 'direct_api' ? 'ESP32 Wi-Fi → 백엔드 → MySQL' : 'MySQL에 보관한 ESP32 실측값'} · MQ-135는 보정 전 ADC 값 · 마지막 측정 {selectedRestroom?.lastUpdated || '확인 중'}</p>
         {user?.isDemo && <p title="체험용 역할 로그인 · 청소·출동·시설 설정은 화면 시연 기능입니다.">체험용 역할 로그인 · 청소·출동·시설 설정은 화면 시연 기능입니다.</p>}
         {dataError && <p role="alert" className="sensor-data-error" title={dataError}>{dataError}</p>}
@@ -2250,106 +3292,114 @@ export default function AdminPage() {
           <div style={styles.pageHeader}>
             <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>알림 및 이벤트 이력</h2>
             <button
-              onClick={() => setAlerts(prev => prev.map(a => accessibleAlerts.some(acc => acc.id === a.id) ? { ...a, isChecked: true } : a))}
+              onClick={confirmAccessibleAlerts}
               style={styles.secondaryBtn}
             >
               선택 항목 일괄 확인
             </button>
           </div>
 
-          <table style={styles.table}>
-            <thead>
-              <tr style={styles.thRow}>
-                <th style={styles.th}>발생 시각</th>
-                <th style={styles.th}>화장실</th>
-                <th style={styles.th}>항목</th>
-                <th style={styles.th}>등급</th>
-                <th style={styles.th}>측정값</th>
-                <th style={styles.th}>내용</th>
-                <th style={styles.th}>확인 상태</th>
-              </tr>
-            </thead>
-            <tbody>
-              {accessibleAlerts.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '36px', color: '#64748b', fontSize: '13px' }}>
-                    담당 구역의 알림 내역이 없습니다.
-                  </td>
+          <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+            <table style={{ ...styles.table, minWidth: '760px' }}>
+              <thead>
+                <tr style={styles.thRow}>
+                  <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>발생 시각</th>
+                  <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>화장실</th>
+                  <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>항목</th>
+                  <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>등급</th>
+                  <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>측정값</th>
+                  <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>내용</th>
+                  <th style={{ ...styles.th, whiteSpace: 'nowrap', textAlign: 'center' }}>확인 상태</th>
                 </tr>
-              ) : (
-                accessibleAlerts.map(a => {
-                  const st = STATUS_STYLES[a.level] || STATUS_STYLES.NORMAL;
-                  return (
-                    <tr key={a.id} style={styles.tr}>
-                      <td style={styles.td}>{a.time}</td>
-                      <td style={{ ...styles.td, fontWeight: '500' }}>{a.restroom}</td>
-                      <td style={styles.td}>{a.metric}</td>
-                      <td style={styles.td}>
-                        <span style={{
-                          ...styles.statusPillSmall,
-                          backgroundColor: st.bg,
-                          color: st.text,
-                          border: `1px solid ${st.border}`
-                        }}>
-                          {st.label}
-                        </span>
-                      </td>
-                      <td style={styles.td}>{a.value}</td>
-                      <td style={styles.td}>{a.memo}</td>
-                      <td style={styles.td}>
-                        {a.isChecked ? (
-                          <span style={{ color: '#64748b', fontSize: '12px' }}>확인됨</span>
-                        ) : (
-                          <button onClick={(e) => handleCheckAlert(a.id, e)} style={styles.checkBtn}>
-                            확인
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {accessibleAlerts.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: '36px', color: '#64748b', fontSize: '13px' }}>
+                      담당 구역의 알림 내역이 없습니다.
+                    </td>
+                  </tr>
+                ) : (
+                  accessibleAlerts.map(a => {
+                    const st = STATUS_STYLES[a.level] || STATUS_STYLES.NORMAL;
+                    return (
+                      <tr key={a.id} style={styles.tr}>
+                        <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{a.time}</td>
+                        <td style={{ ...styles.td, fontWeight: '500', whiteSpace: 'nowrap' }}>{a.restroom}</td>
+                        <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{a.metric}</td>
+                        <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
+                          <span style={{
+                            ...styles.statusPillSmall,
+                            backgroundColor: st.bg,
+                            color: st.text,
+                            border: `1px solid ${st.border}`
+                          }}>
+                            {st.label}
+                          </span>
+                        </td>
+                        <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{a.value}</td>
+                        <td style={{ ...styles.td, minWidth: '160px' }}>{a.memo}</td>
+                        <td style={{ ...styles.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          {a.isChecked ? (
+                            <span style={{ color: '#64748b', fontSize: '12px' }}>확인됨</span>
+                          ) : (
+                            <button onClick={(e) => handleCheckAlert(a.id, e)} style={styles.checkBtn}>
+                              확인
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {/* 5. 청소 관리 전면 개편 화면 (SCR-05 명세 반영) */}
       {activeTab === 'cleaning' && (
         <div style={{ padding: '20px 24px', maxWidth: '1380px', margin: '0 auto' }}>
-          {/* ① 상단 화장실별 최근 청소 경과 현황 바 (FR-53) */}
+          {/* ① 상단 화장실별 최근 청소 경과 현황 및 담당자 지정 바 (FR-53) */}
           <section style={{ marginBottom: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
               <h3 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>
                 화장실별 마지막 청소 경과 현황
               </h3>
               <span style={{ fontSize: '11px', color: '#64748b' }}>
-                기준 시간({systemSettings.cleanWarnHours}시간) 초과 시 경고 표시
+                기준 시간({appliedSettings.cleanWarnHours}시간) 초과 시 경고 표시
               </span>
             </div>
 
             <div style={styles.cleaningStatusTicker}>
               {accessibleRestrooms.map(r => {
-                const isOver = r.lastCleanedHours >= systemSettings.cleanWarnHours;
+                const isOver = r.lastCleanedHours >= appliedSettings.cleanWarnHours;
                 return (
                   <div
                     key={r.id}
                     style={{
                       ...styles.tickerCard,
                       border: isOver ? '1px solid #fee2e2' : '1px solid #e2e8f0',
-                      backgroundColor: isOver ? '#fff5f5' : '#ffffff'
+                      backgroundColor: isOver ? '#fff5f5' : '#ffffff',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px'
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                      <span title={r.name} style={{ fontSize: '12px', fontWeight: '600', color: '#0f172a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-                      <span style={{ fontSize: '11px', color: '#64748b', flexShrink: 0, whiteSpace: 'nowrap' }}>{r.floor}</span>
+                      <span title={r.name} style={{ fontSize: '13px', fontWeight: '700', color: '#0f172a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                      <span style={{ fontSize: '11px', color: '#64748b', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                        {r.floor} &middot; {isOver ? (
+                          <span style={{ color: '#dc2626', fontWeight: '600' }}><IconAlertCircle size={11} /> {r.lastCleanedHours}시간 경과</span>
+                        ) : (
+                          r.lastCleanedHours == null ? '청소 기록 없음' : `${r.lastCleanedHours}시간 전`
+                        )}
+                      </span>
                     </div>
-                    <div style={{ marginTop: '4px', fontSize: '11px', color: isOver ? '#991b1b' : '#334155' }}>
-                      {isOver ? (
-                        <span style={{ fontWeight: '600' }}><IconAlertCircle /> {r.lastCleanedHours}시간 경과 (요망)</span>
-                      ) : (
-                        r.lastCleanedHours == null ? '청소 기록 없음' : `${r.lastCleanedHours}시간 전 (${r.cleanWorker})`
-                      )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                      <span style={{ fontSize: '11px', fontWeight: '500', color: '#64748b', flexShrink: 0 }}>담당 관리인</span>
+                      {renderZoneWorkerSelect(r, true, true)}
                     </div>
                   </div>
                 );
@@ -2357,9 +3407,14 @@ export default function AdminPage() {
             </div>
           </section>
 
+          {/* ② 청소관리인 등록 및 구역 배정 섹션 */}
+          <section style={{ marginBottom: '20px' }}>
+            {renderWorkerManagementSection()}
+          </section>
+
           {/* 중앙 2열 분할 레이아웃: 좌측(청소 완료 등록 폼) / 우측(청소 이력 상세 테이블) */}
-          <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: '20px', alignItems: 'start' }}>
-            {/* ② 청소 완료 등록 폼 (FR-50) */}
+          <div className="admin-cleaning-split">
+            {/* ③ 청소 완료 등록 폼 (FR-50) */}
             <div style={styles.panelCard}>
               <div style={{ borderBottom: '1px solid #f1f5f9', paddingBottom: '10px', marginBottom: '14px' }}>
                 <h3 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>청소 완료 등록</h3>
@@ -2371,11 +3426,18 @@ export default function AdminPage() {
                   <label style={styles.formLabel}>대상 화장실</label>
                   <select
                     value={cleanFormRestroomId}
-                    onChange={e => setCleanFormRestroomId(e.target.value)}
+                    onChange={e => {
+                      const nextId = e.target.value;
+                      setCleanFormRestroomId(nextId);
+                      const targetR = accessibleRestrooms.find(r => String(r.id) === String(nextId));
+                      if (targetR && targetR.cleanWorker && targetR.cleanWorker !== '담당자 미지정') {
+                        setCleanFormWorker(targetR.cleanWorker);
+                      }
+                    }}
                     style={styles.formSelect}
                   >
                     {accessibleRestrooms.map(r => (
-                      <option key={r.id} value={r.id}>{r.name} ({r.floor})</option>
+                      <option key={r.id} value={r.id}>{r.name} ({r.floor}) - 담당: {r.cleanWorker}</option>
                     ))}
                   </select>
                 </div>
@@ -2391,7 +3453,33 @@ export default function AdminPage() {
                 </div>
 
                 <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>담당자 성명</label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label style={{ ...styles.formLabel, marginBottom: 0 }}>담당자 성명</label>
+                    {workers.length > 0 && (
+                      <select
+                        value=""
+                        onChange={e => {
+                          if (e.target.value) setCleanFormWorker(e.target.value);
+                        }}
+                        style={{
+                          padding: '2px 6px',
+                          fontSize: '11px',
+                          borderRadius: '4px',
+                          border: '1px solid #cbd5e1',
+                          backgroundColor: '#f8fafc',
+                          color: '#334155',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <option value="">등록된 관리인 선택...</option>
+                        {workers.map(w => (
+                          <option key={w.id} value={`${w.name} (${w.role ? w.role.split(' ')[0] : '미화팀'})`}>
+                            {w.name} ({w.role || '미화팀'})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                   <input
                     type="text"
                     required
@@ -2436,9 +3524,59 @@ export default function AdminPage() {
                   청소 완료 저장
                 </button>
               </form>
+
+              {/* 일일 위생 체크리스트 (MySQL daily_checklists 영속화) */}
+              <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #f1f5f9' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <h4 style={{ margin: 0, fontSize: '12px', fontWeight: '700', color: '#0f172a' }}>
+                    📋 당일 위생 체크리스트
+                  </h4>
+                  <span style={{ fontSize: '10px', color: '#166534', fontWeight: '600' }}>
+                    DB 자동 저장
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {[
+                    { key: 'floor', label: '바닥 물청소·건조 및 소독' },
+                    { key: 'sink', label: '세면대·거울 소독 및 물얼룩 제거' },
+                    { key: 'toilet', label: '변기 살균 세정 및 수압 점검' },
+                    { key: 'soap', label: '휴지·비누·손소독제 보충' },
+                    { key: 'trash', label: '쓰레기통 비움·위생봉투 교체' },
+                    { key: 'vent', label: '환풍기 가동·디퓨저 향기 점검' }
+                  ].map(item => {
+                    const isChecked = !!cleanChecklist[item.key];
+                    return (
+                      <label
+                        key={item.key}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          fontSize: '12px',
+                          color: isChecked ? '#166534' : '#334155',
+                          backgroundColor: isChecked ? '#f0fdf4' : '#f8fafc',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          border: isChecked ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleChecklistItem(item.key)}
+                        />
+                        <span style={{ textDecoration: isChecked ? 'line-through' : 'none' }}>
+                          {item.label}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
-            {/* ③ 청소 이력 테이블 (FR-51) */}
+            {/* ④ 청소 이력 테이블 (FR-51) */}
             <div style={styles.panelCard}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                 <div>
@@ -2454,42 +3592,42 @@ export default function AdminPage() {
                   >
                     <option value="ALL">전체 화장실</option>
                     {accessibleRestrooms.map(r => (
-                      <option key={r.id} value={r.name}>{r.name}</option>
+                      <option key={r.id} value={r.id}>{r.name} · 구역 #{r.id}</option>
                     ))}
                   </select>
                 </div>
               </div>
 
-              <div style={{ overflowX: 'auto' }}>
-                <table style={styles.table}>
+              <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <table style={{ ...styles.table, minWidth: '700px' }}>
                   <thead>
                     <tr style={styles.thRow}>
-                      <th style={styles.th}>작업 일시</th>
-                      <th style={styles.th}>화장실 구역</th>
-                      <th style={styles.th}>작업 구분</th>
-                      <th style={styles.th}>담당자</th>
+                      <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>작업 일시</th>
+                      <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>화장실 구역</th>
+                      <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>작업 구분</th>
+                      <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>담당자</th>
                       <th style={styles.th}>점검 메모</th>
-                      <th style={{ ...styles.th, textAlign: 'center' }}>상태</th>
+                      <th style={{ ...styles.th, textAlign: 'center', whiteSpace: 'nowrap' }}>상태</th>
                     </tr>
                   </thead>
                   <tbody>
                     {accessibleCleaningLogs
-                      .filter(log => cleanFilterRestroom === 'ALL' || log.restroomName === cleanFilterRestroom)
+                      .filter(log => cleanFilterRestroom === 'ALL' || String(log.zoneId) === cleanFilterRestroom)
                       .map(log => (
                         <tr key={log.id} style={styles.tr}>
-                          <td style={styles.td}>{log.time}</td>
-                          <td style={{ ...styles.td, fontWeight: '600' }}>{log.restroomName}</td>
-                          <td style={styles.td}>
+                          <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{log.time}</td>
+                          <td style={{ ...styles.td, fontWeight: '600', whiteSpace: 'nowrap' }}>{log.restroomName}</td>
+                          <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
                             <span style={styles.cleanTypeTag}>{log.type}</span>
                           </td>
-                          <td style={styles.td}>{log.worker}</td>
-                          <td style={styles.td}>{log.memo}</td>
-                          <td style={{ ...styles.td, textAlign: 'center' }}>
+                          <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{log.worker}</td>
+                          <td style={{ ...styles.td, minWidth: '150px' }}>{log.memo}</td>
+                          <td style={{ ...styles.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
                             <span style={styles.statusPillSmall}>완료</span>
                           </td>
                         </tr>
                       ))}
-                    {accessibleCleaningLogs.filter(log => cleanFilterRestroom === 'ALL' || log.restroomName === cleanFilterRestroom).length === 0 && (
+                    {accessibleCleaningLogs.filter(log => cleanFilterRestroom === 'ALL' || String(log.zoneId) === cleanFilterRestroom).length === 0 && (
                       <tr>
                         <td colSpan={6} style={{ textAlign: 'center', padding: '36px', color: '#64748b', fontSize: '13px' }}>
                           담당 구역의 청소 이력이 없습니다.
@@ -2564,7 +3702,7 @@ export default function AdminPage() {
                   <span style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap' }}>적용 대상:</span>
                   <select
                     value={thresholdScope}
-                    onChange={e => setThresholdScope(e.target.value)}
+                    onChange={e => selectThresholdScope(e.target.value)}
                     style={styles.select}
                   >
                     <option value="ALL">전체 기본값 적용</option>
@@ -2586,6 +3724,7 @@ export default function AdminPage() {
                       <label style={styles.thresholdLabel}>주의 기준 (이상)</label>
                       <input
                         type="number"
+                        disabled={user.role !== ROLES.DEVELOPER}
                         value={thresholds.tempWarn}
                         onChange={e => setThresholds({ ...thresholds, tempWarn: Number(e.target.value) })}
                         style={styles.thresholdInput}
@@ -2595,6 +3734,7 @@ export default function AdminPage() {
                       <label style={styles.thresholdLabel}>위험 기준 (이상)</label>
                       <input
                         type="number"
+                        disabled={user.role !== ROLES.DEVELOPER}
                         value={thresholds.tempDanger}
                         onChange={e => setThresholds({ ...thresholds, tempDanger: Number(e.target.value) })}
                         style={styles.thresholdInput}
@@ -2614,6 +3754,7 @@ export default function AdminPage() {
                       <label style={styles.thresholdLabel}>주의 기준 (이상)</label>
                       <input
                         type="number"
+                        disabled={user.role !== ROLES.DEVELOPER}
                         value={thresholds.humidWarn}
                         onChange={e => setThresholds({ ...thresholds, humidWarn: Number(e.target.value) })}
                         style={styles.thresholdInput}
@@ -2623,6 +3764,7 @@ export default function AdminPage() {
                       <label style={styles.thresholdLabel}>위험 기준 (이상)</label>
                       <input
                         type="number"
+                        disabled={user.role !== ROLES.DEVELOPER}
                         value={thresholds.humidDanger}
                         onChange={e => setThresholds({ ...thresholds, humidDanger: Number(e.target.value) })}
                         style={styles.thresholdInput}
@@ -2671,7 +3813,7 @@ export default function AdminPage() {
                 >
                   기본값 복원
                 </button>
-                <button onClick={() => showToast('임계값을 적용했습니다. 서버에는 저장되지 않고 이 화면 세션에만 반영됩니다.')} style={styles.primaryBtn}>
+                <button onClick={handleSaveThresholds} style={styles.primaryBtn}>
                   임계값 저장
                 </button>
               </div>
@@ -2688,64 +3830,344 @@ export default function AdminPage() {
                     <span style={{ fontSize: '11px', color: '#64748b' }}>모니터링 대상 화장실과 아두이노 기기 매핑을 관리합니다.</span>
                   </div>
 
-                  <button onClick={() => setIsAddRestroomModalOpen(true)} style={styles.primaryBtn}>
-                    <IconPlus /> 신규 화장실 등록
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={() => {
+                        const firstZoneId = accessibleRestrooms[0]?.id || restrooms[0]?.id || 3;
+                        setNewSensorData({ zoneId: firstZoneId, sensorType: 'TEMP_HUMID' });
+                        setIsAddSensorModalOpen(true);
+                      }}
+                      style={{ ...styles.secondaryBtn, borderColor: '#3b82f6', color: '#1d4ed8' }}
+                    >
+                      <IconPlus /> 센서 단독 추가
+                    </button>
+                    <button onClick={() => setIsAddZoneModalOpen(true)} style={styles.secondaryBtn}>
+                      <IconPlus /> 신규 구역 등록
+                    </button>
+                    <button onClick={() => setIsAddRestroomModalOpen(true)} style={styles.primaryBtn}>
+                      <IconPlus /> 신규 화장실 등록
+                    </button>
+                  </div>
                 </div>
 
-                <table style={styles.table}>
-                  <thead>
-                    <tr style={styles.thRow}>
-                      <th style={styles.th}>시설명</th>
-                      <th style={styles.th}>층수</th>
-                      <th style={styles.th}>구분</th>
-                      <th style={styles.th}>아두이노 기기 ID</th>
-                      <th style={styles.th}>상태</th>
-                      <th style={{ ...styles.th, textAlign: 'center' }}>동작</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {restrooms.map(r => (
-                      <tr key={r.id} style={styles.tr}>
-                        <td style={{ ...styles.td, fontWeight: '600' }}>{r.name}</td>
-                        <td style={styles.td}>{r.floor}</td>
-                        <td style={styles.td}>{genderLabel(r.gender)}</td>
-                        <td style={{ ...styles.td, fontFamily: 'monospace' }}>{r.deviceId}</td>
-                        <td style={styles.td}>
-                          <span style={{
-                            ...styles.statusPillSmall,
-                            backgroundColor: r.isActive ? '#f0fdf4' : '#f1f5f9',
-                            color: r.isActive ? '#166534' : '#64748b'
-                          }}>
-                            {r.isActive ? '사용 중' : '비활성'}
-                          </span>
-                        </td>
-                        <td style={{ ...styles.td, textAlign: 'center' }}>
-                          <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
+                {/* 미등록 IoT 기기 자동 감지 대기함 (관리자 전용) */}
+                {discoveredDevices && discoveredDevices.length > 0 ? (
+                  <div style={{
+                    marginBottom: '18px',
+                    padding: '14px 16px',
+                    backgroundColor: '#fffbeb',
+                    borderRadius: '8px',
+                    border: '1px solid #fde68a',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '15px' }}>📡</span>
+                        <h4 style={{ margin: 0, fontSize: '13px', fontWeight: '700', color: '#92400e' }}>
+                          신규 감지된 미등록 기기 ({discoveredDevices.length}대 대기 중)
+                        </h4>
+                        <span style={{ fontSize: '11px', color: '#b45309' }}>
+                          장치가 전송한 확인 전 정보입니다. 현장의 MAC 주소와 설치 위치를 대조한 뒤 등록해주세요.
+                        </span>
+                      </div>
+                      <button
+                        onClick={loadDiscoveredDevices}
+                        style={{ ...styles.secondaryBtn, padding: '3px 8px', fontSize: '11px', height: '24px' }}
+                      >
+                        새로고침
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {discoveredDevices.map(dev => (
+                        <div
+                          key={dev.macAddress}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: '10px 14px',
+                            backgroundColor: '#ffffff',
+                            borderRadius: '6px',
+                            border: '1px solid #fef3c7',
+                            flexWrap: 'wrap',
+                            gap: '8px'
+                          }}
+                        >
+                          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <div>
+                              <span style={{ fontSize: '11px', fontWeight: '600', color: '#64748b' }}>MAC: </span>
+                              <strong style={{ fontFamily: 'monospace', fontSize: '13px', color: '#0f172a' }}>{dev.macAddress}</strong>
+                            </div>
+                            {dev.ipAddress && (
+                              <div style={{ fontSize: '12px', color: '#64748b' }}>
+                                IP: <span style={{ fontFamily: 'monospace' }}>{dev.ipAddress}</span>
+                              </div>
+                            )}
+                            <div style={{ fontSize: '12px', color: '#64748b' }}>
+                              최근 신호: <span style={{ color: '#0f172a', fontWeight: '500' }}>{dev.lastSeenAt ? parseUtcDate(dev.lastSeenAt).toLocaleTimeString('ko-KR') : '방금'}</span>
+                              {dev.requestCount > 1 && ` (${dev.requestCount}회)`}
+                            </div>
+                            {dev.latitude != null && dev.longitude != null && (
+                              <div style={{ fontSize: '11px', color: '#0284c7', backgroundColor: '#e0f2fe', padding: '2px 6px', borderRadius: '4px' }}>
+                                📍 GPS: {dev.latitude.toFixed(4)}, {dev.longitude.toFixed(4)}
+                              </div>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '8px' }}>
                             <button
-                              onClick={() => handleToggleRestroomActive(r.id)}
+                              onClick={() => handleRegisterDiscoveredDevice(dev)}
                               style={{
-                                ...styles.actionBtnSmall,
-                                color: r.isActive ? '#d97706' : '#166534'
+                                padding: '6px 12px',
+                                backgroundColor: '#2563eb',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '4px',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                cursor: 'pointer'
                               }}
                             >
-                              {r.isActive ? '비활성화' : '활성화'}
+                              + 이 기기로 신규 화장실 등록
                             </button>
                             <button
-                              onClick={() => handleDeleteRestroom(r.id)}
+                              onClick={() => handleDismissDiscoveredDevice(dev.macAddress)}
                               style={{
-                                ...styles.actionBtnSmall,
-                                color: '#dc2626'
+                                padding: '6px 10px',
+                                backgroundColor: '#f1f5f9',
+                                color: '#64748b',
+                                border: '1px solid #cbd5e1',
+                                borderRadius: '4px',
+                                fontSize: '12px',
+                                cursor: 'pointer'
                               }}
                             >
-                              삭제
+                              무시
                             </button>
                           </div>
-                        </td>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{
+                    marginBottom: '16px',
+                    padding: '10px 14px',
+                    backgroundColor: '#f8fafc',
+                    borderRadius: '6px',
+                    border: '1px solid #e2e8f0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '12px',
+                    color: '#64748b'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ color: '#16a34a', fontWeight: '700' }}>✔</span>
+                      <span>모든 IoT 기기가 정상 등록되어 운영 중입니다. 새로운 ESP32의 전원을 켜면 여기에 자동으로 감지됩니다.</span>
+                    </div>
+                    <button
+                      onClick={loadDiscoveredDevices}
+                      style={{ ...styles.secondaryBtn, padding: '2px 8px', fontSize: '11px', height: '22px' }}
+                    >
+                      실시간 감지 확인
+                    </button>
+                  </div>
+                )}
+
+                <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                  <table style={{ ...styles.table, minWidth: '680px' }}>
+                    <thead>
+                      <tr style={styles.thRow}>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>시설명</th>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>층수</th>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>구분</th>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>아두이노 기기 ID</th>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>상태</th>
+                        <th style={{ ...styles.th, textAlign: 'center', whiteSpace: 'nowrap' }}>동작</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {restrooms.map(r => (
+                        <tr key={r.id} style={styles.tr}>
+                          <td style={{ ...styles.td, fontWeight: '600', whiteSpace: 'nowrap' }}>{r.name}</td>
+                          <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{r.floor}</td>
+                          <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{genderLabel(r.gender)}</td>
+                          <td style={{ ...styles.td, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span>{r.deviceId}</span>
+                              <button
+                                onClick={() => handleOpenEditDeviceSet(r)}
+                                title="아두이노 기기(ESP32 MAC) 변경 또는 설치 위치(구역) 이동"
+                                style={{
+                                  padding: '2px 6px',
+                                  fontSize: '10px',
+                                  color: '#2563eb',
+                                  backgroundColor: '#eff6ff',
+                                  border: '1px solid #bfdbfe',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  fontWeight: '600'
+                                }}
+                              >
+                                변경
+                              </button>
+                            </div>
+                          </td>
+                          <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
+                            <span style={{
+                              ...styles.statusPillSmall,
+                              backgroundColor: r.isActive ? '#f0fdf4' : '#f1f5f9',
+                              color: r.isActive ? '#166534' : '#64748b'
+                            }}>
+                              {r.isActive ? '사용 중' : '비활성'}
+                            </span>
+                          </td>
+                          <td style={{ ...styles.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                            <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                              <button
+                                onClick={() => handleToggleRestroomActive(r.id)}
+                                style={{
+                                  ...styles.actionBtnSmall,
+                                  color: r.isActive ? '#d97706' : '#166534'
+                                }}
+                              >
+                                {r.isActive ? '비활성화' : '활성화'}
+                              </button>
+                              <button
+                                onClick={() => handleOpenEditZone(r)}
+                                style={{
+                                  ...styles.actionBtnSmall,
+                                  color: '#2563eb'
+                                }}
+                              >
+                                수정
+                              </button>
+                              <button
+                                onClick={() => handleOpenEditDeviceSet(r)}
+                                style={{
+                                  ...styles.actionBtnSmall,
+                                  color: '#059669',
+                                  borderColor: '#bbf7d0',
+                                  backgroundColor: '#f0fdf4'
+                                }}
+                                title="설치된 아두이노 보드(MAC) 교체 또는 다른 구역으로 위치 이전"
+                              >
+                                기기 변경
+                              </button>
+                              <button
+                                onClick={() => handleOpenDeviceSetHistory(r)}
+                                style={{
+                                  ...styles.actionBtnSmall,
+                                  color: '#4f46e5'
+                                }}
+                              >
+                                이력
+                              </button>
+                              <button
+                                onClick={() => handleDeleteRestroom(r.id)}
+                                style={{
+                                  ...styles.actionBtnSmall,
+                                  color: '#dc2626'
+                                }}
+                              >
+                                삭제
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* 개별 센서 현황 및 상태/삭제 관리 (GET/PATCH/DELETE /api/dev/sensors) */}
+                <div style={{ marginTop: '28px', borderTop: '1px solid #e2e8f0', paddingTop: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>
+                        개별 등록 센서 현황 (GET / PATCH / DELETE /api/dev/sensors)
+                      </h4>
+                      <span style={{ fontSize: '11px', color: '#64748b' }}>
+                        구역별로 설치된 온습도(TEMP_HUMID)·유해가스(GAS)·도어(MAG) 센서의 상태 전환 및 개별 삭제를 관리합니다.
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => {
+                          const firstZoneId = accessibleRestrooms[0]?.id || restrooms[0]?.id || 3;
+                          setNewSensorData({ zoneId: firstZoneId, sensorType: 'TEMP_HUMID' });
+                          setIsAddSensorModalOpen(true);
+                        }}
+                        style={{ ...styles.secondaryBtn, color: '#2563eb' }}
+                      >
+                        <IconPlus /> 센서 단독 추가
+                      </button>
+                      <button onClick={() => fetchSensorsApi().then(setSensorsList)} style={styles.secondaryBtn}>
+                        새로고침
+                      </button>
+                    </div>
+                  </div>
+                  {sensorsList && sensorsList.length > 0 ? (
+                    <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                      <table style={{ ...styles.table, minWidth: '680px' }}>
+                        <thead>
+                          <tr style={styles.thRow}>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>센서 ID</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>센서 종류</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>설치 구역</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>기기 세트</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>상태</th>
+                            <th style={{ ...styles.th, textAlign: 'center', whiteSpace: 'nowrap' }}>동작</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sensorsList.map(s => (
+                            <tr key={s.sensorId} style={styles.tr}>
+                              <td style={{ ...styles.td, fontFamily: 'monospace', fontWeight: '600', whiteSpace: 'nowrap' }}>#{s.sensorId}</td>
+                              <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{s.sensorType}</td>
+                              <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{s.zoneName || `구역 #${s.zoneId}`}</td>
+                              <td style={{ ...styles.td, fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                                {s.setCode ? `${s.setCode} (${s.macAddress || ''})` : '단독 센서'}
+                              </td>
+                              <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
+                                <span style={{
+                                  ...styles.statusPillSmall,
+                                  backgroundColor: s.status === 'ACTIVE' ? '#f0fdf4' : '#f1f5f9',
+                                  color: s.status === 'ACTIVE' ? '#166534' : '#64748b'
+                                }}>
+                                  {s.status || 'OFFLINE'}
+                                </span>
+                              </td>
+                              <td style={{ ...styles.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                <div style={{ display: 'inline-flex', gap: '8px', whiteSpace: 'nowrap' }}>
+                                  <button
+                                    onClick={() => handleToggleSensorStatus(s)}
+                                    style={{
+                                      ...styles.actionBtnSmall,
+                                      color: s.status === 'ACTIVE' ? '#d97706' : '#166534'
+                                    }}
+                                  >
+                                    {s.status === 'ACTIVE' ? '오프라인 전환' : '온라인 전환'}
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteSensorItem(s)}
+                                    style={{ ...styles.actionBtnSmall, color: '#dc2626' }}
+                                  >
+                                    삭제
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '12px', color: '#94a3b8', padding: '12px 0' }}>등록된 개별 센서가 없습니다.</div>
+                  )}
+                </div>
               </div>
             ) : (
               <div style={{ ...styles.panelCard, textAlign: 'center', padding: '60px 24px' }}>
@@ -2786,7 +4208,7 @@ export default function AdminPage() {
                         value={systemSettings.offlineSeconds}
                         onChange={e => setSystemSettings({ ...systemSettings, offlineSeconds: Number(e.target.value) })}
                         style={styles.systemInput}
-                      /> 초 (기본: 60초)
+                      /> 초 (기본: 90초)
                     </div>
                   </div>
 
@@ -2801,7 +4223,7 @@ export default function AdminPage() {
                         value={systemSettings.refreshSeconds}
                         onChange={e => setSystemSettings({ ...systemSettings, refreshSeconds: Number(e.target.value) })}
                         style={styles.systemInput}
-                      /> 초 (기본: 5초)
+                      /> 초 (기본: 30초)
                     </div>
                   </div>
 
@@ -2816,55 +4238,275 @@ export default function AdminPage() {
                         value={systemSettings.cleanWarnHours}
                         onChange={e => setSystemSettings({ ...systemSettings, cleanWarnHours: Number(e.target.value) })}
                         style={styles.systemInput}
-                      /> 시간 (기본: 8시간)
+                      /> 시간 (기본: 4시간)
                     </div>
                   </div>
 
                   <div style={styles.systemRow}>
-                    <div style={styles.systemLabelCol}>
-                      <div style={styles.systemLabelTitle}>센서 원본 데이터 보관 기간</div>
-                      <div style={styles.systemLabelSub}>지정 기간이 지난 센서 측정 로그는 자동 정리됩니다.</div>
-                    </div>
-                    <div style={styles.systemInputCol}>
-                      <input
-                        type="number"
-                        value={systemSettings.retentionDays}
-                        onChange={e => setSystemSettings({ ...systemSettings, retentionDays: Number(e.target.value) })}
-                        style={styles.systemInput}
-                      /> 일 (기본: 30일)
-                    </div>
+                    <div style={styles.systemLabelCol}><div style={styles.systemLabelTitle}>센서 원본 보관 기간</div><div style={styles.systemLabelSub}>현재 서버 정책은 7일입니다.</div></div>
+                    <div style={styles.systemInputCol}>7일</div>
                   </div>
-
-                  <div style={styles.systemRow}>
-                    <div style={styles.systemLabelCol}>
-                      <div style={styles.systemLabelTitle}>기기 수집 인증키 (X-Device-Key)</div>
-                      <div style={styles.systemLabelSub}>아두이노 패킷 전송 시 헤더에 포함되는 시크릿 키입니다.</div>
-                    </div>
-                    <div style={styles.systemInputCol}>
-                      <input
-                        type="text"
-                        readOnly
-                        value={systemSettings.deviceKey}
-                        style={{ ...styles.systemInput, width: '220px', fontFamily: 'monospace', color: '#64748b' }}
-                      />
-                      <button
-                        onClick={() => {
-                          const newK = 'TCP-SEC-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-                          setSystemSettings({ ...systemSettings, deviceKey: newK });
-                          showToast('새 인증키가 발급되었습니다.');
-                        }}
-                        style={{ ...styles.secondaryBtn, marginLeft: '6px' }}
-                      >
-                        재발급
-                      </button>
-                    </div>
-                  </div>
+                  <p>장치 인증 키는 아래 기기별 버튼에서 발급·폐기합니다. 새 키를 발급하면 이전 키는 즉시 사용할 수 없습니다.</p>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
-                  <button onClick={() => showToast('시스템 설정이 저장되었습니다.')} style={styles.primaryBtn}>
+                  <button onClick={handleSaveSystemSettings} style={styles.primaryBtn}>
                     시스템 설정 저장
                   </button>
+                </div>
+
+                {/* 클라우드 Upstash Redis 동기화 모니터링 */}
+                <div style={{ marginTop: '28px', borderTop: '1px solid #e2e8f0', paddingTop: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>
+                        Upstash Redis 클라우드 원격 동기화 상태 (GET /api/iot/upstash/status)
+                      </h4>
+                      <span style={{ fontSize: '11px', color: '#64748b' }}>ESP32 수집 센서 데이터의 클라우드 백업 및 동기화 파이프라인 모니터링입니다.</span>
+                    </div>
+                    <button onClick={() => fetchUpstashStatusApi().then(setUpstashStatus).catch(error=>showToast(error.message))} style={styles.secondaryBtn}>새로고침</button>
+                  </div>
+                  {upstashStatus ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', background: '#f8fafc', padding: '14px', borderRadius: '6px', fontSize: '12px', border: '1px solid #e2e8f0' }}>
+                      <div><span style={{ color: '#64748b', display: 'block', marginBottom: '4px' }}>Redis 구성:</span> <strong>{upstashStatus.configured ? '설정 완료 (OK)' : '미설정'}</strong></div>
+                      <div><span style={{ color: '#64748b', display: 'block', marginBottom: '4px' }}>동기화 활성:</span> <strong>{upstashStatus.enabled ? '작동 중' : '비활성'}</strong></div>
+                      <div><span style={{ color: '#64748b', display: 'block', marginBottom: '4px' }}>누적 수집 데이터:</span> <strong>{upstashStatus.importedSamples != null ? upstashStatus.importedSamples.toLocaleString() : 0}건</strong></div>
+                      <div><span style={{ color: '#64748b', display: 'block', marginBottom: '4px' }}>최근 성공 시각:</span> <strong>{upstashStatus.lastSuccess ? parseUtcDate(upstashStatus.lastSuccess).toLocaleTimeString('ko-KR') : '대기 중'}</strong></div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '12px', color: '#94a3b8', padding: '12px 0' }}>클라우드 동기화 상태를 확인하고 있습니다...</div>
+                  )}
+                </div>
+
+                {/* 하드웨어 기기 세트 등록 상세 */}
+                <div style={{ marginTop: '28px', borderTop: '1px solid #e2e8f0', paddingTop: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>
+                        등록된 IoT 기기 세트 현황 (GET /api/admin/device-sets)
+                      </h4>
+                      <span style={{ fontSize: '11px', color: '#64748b' }}>ESP32 컨트롤러 MAC 주소와 관제 구역 매핑 현황입니다.</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => {
+                          const firstZoneId = accessibleRestrooms[0]?.id || restrooms[0]?.id || 3;
+                          setNewSensorData({ zoneId: firstZoneId, sensorType: 'TEMP_HUMID' });
+                          setIsAddSensorModalOpen(true);
+                        }}
+                        style={{ ...styles.secondaryBtn, color: '#2563eb' }}
+                      >
+                        <IconPlus /> 센서 단독 추가
+                      </button>
+                      <button onClick={() => fetchDeviceSetsApi().then(setDeviceSets).catch(error=>showToast(error.message))} style={styles.secondaryBtn}>새로고침</button>
+                    </div>
+                  </div>
+                  {deviceSets && deviceSets.length > 0 ? (
+                    <div style={{overflowX:'auto'}}><table style={{ ...styles.table, minWidth: '680px' }}>
+                        <thead>
+                          <tr style={styles.thRow}>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>세트 코드</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>MAC 주소</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>연동 구역</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>설치 라벨</th>
+                            <th style={{ ...styles.th, textAlign: 'center', whiteSpace: 'nowrap' }}>동작</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {deviceSets.map(ds => (
+                            <tr key={ds.deviceSetId} style={styles.tr}>
+                              <td style={{ ...styles.td, whiteSpace: 'nowrap' }}><strong>{ds.setCode}</strong></td>
+                              <td style={{ ...styles.td, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{ds.macAddress}</td>
+                              <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{ds.zoneName || `Zone #${ds.zoneId}`}</td>
+                              <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{ds.installationLabel || '—'}</td>
+                              <td style={{ ...styles.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                <div style={{ display: 'inline-flex', gap: '6px', whiteSpace: 'nowrap' }}><button onClick={()=>issueDeviceKey(ds.macAddress)} style={styles.actionBtnSmall}>인증 키 발급</button><button onClick={()=>revokeDeviceKey(ds.macAddress)} style={styles.actionBtnSmall}>인증 키 폐기</button>
+                                  <button
+                                    onClick={() => handleOpenEditDeviceSetFromSet(ds)}
+                                    style={{ ...styles.actionBtnSmall, color: '#2563eb' }}
+                                  >
+                                    수정
+                                  </button>
+                                  <button
+                                    onClick={() => handleOpenDeviceSetHistoryFromSet(ds)}
+                                    style={{ ...styles.actionBtnSmall, color: '#4f46e5' }}
+                                  >
+                                    이력
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteDeviceSet(ds.deviceSetId)}
+                                    style={{ ...styles.actionBtnSmall, color: '#dc2626' }}
+                                  >
+                                    삭제
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '12px', color: '#94a3b8', padding: '12px 0' }}>등록된 IoT 하드웨어 기기 세트가 없습니다.</div>
+                  )}
+                </div>
+
+                {/* 시스템 계정(Users) 및 구역 접근 권한(ZonePermissions) 관리 (F07, F18) */}
+                <div style={{ marginTop: '28px', borderTop: '1px solid #e2e8f0', paddingTop: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <div>
+                      <h4 style={{ margin: 0, fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>
+                        시스템 계정 및 구역 접근 권한 관리 (GET / POST / PUT / DELETE /api/admin/users)
+                      </h4>
+                      <span style={{ fontSize: '11px', color: '#64748b' }}>
+                        개발자(DEVELOPER)·현장관리자(ADMIN)·청소담당자(CLEANER) 계정을 생성·수정·삭제하고 접근 가능한 관제 구역을 배정합니다.
+                      </span>
+                    </div>
+                    <button onClick={() => fetchUsersApi().then(setUsersList)} style={styles.secondaryBtn}>새로고침</button>
+                  </div>
+
+                  <form
+                    onSubmit={handleSaveUserForm}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr 1fr 2fr auto',
+                      gap: '10px',
+                      alignItems: 'end',
+                      padding: '12px',
+                      backgroundColor: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '8px',
+                      marginBottom: '14px'
+                    }}
+                  >
+                    <div>
+                      <label style={{ ...styles.formLabel, fontSize: '11px' }}>계정 ID (username)</label>
+                      <input
+                        type="text"
+                        placeholder="예: cleaner2"
+                        value={userForm.username}
+                        onChange={e => setUserForm({ ...userForm, username: e.target.value })}
+                        style={styles.formInput}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ ...styles.formLabel, fontSize: '11px' }}>
+                        {editingUserId ? '비밀번호 (변경 시 입력)' : '비밀번호'}
+                      </label>
+                      <input
+                        type="password"
+                        placeholder={editingUserId ? '유지 시 비워둠' : '12자 이상 직접 입력'}
+                        value={userForm.password}
+                        onChange={e => setUserForm({ ...userForm, password: e.target.value })}
+                        style={styles.formInput}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ ...styles.formLabel, fontSize: '11px' }}>권한 역할 (Role)</label>
+                      <select
+                        value={userForm.role}
+                        onChange={e => setUserForm({ ...userForm, role: e.target.value })}
+                        style={styles.formSelect}
+                      >
+                        <option value="DEVELOPER">DEVELOPER (최고 개발자)</option>
+                        <option value="ADMIN">ADMIN (현장 관리자)</option>
+                        <option value="CLEANER">CLEANER (청소 담당자)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ ...styles.formLabel, fontSize: '11px' }}>담당 관제 구역 선택 (복수 선택)</label>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '6px 8px', backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '6px', maxHeight: '64px', overflowY: 'auto' }}>
+                        {restrooms.map(r => {
+                          const checked = userForm.zoneIds.includes(Number(r.id));
+                          return (
+                            <label key={r.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  const zId = Number(r.id);
+                                  setUserForm(prev => ({
+                                    ...prev,
+                                    zoneIds: checked ? prev.zoneIds.filter(id => id !== zId) : [...prev.zoneIds, zId]
+                                  }));
+                                }}
+                              />
+                              <span>{r.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      {editingUserId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingUserId(null);
+                            setUserForm({ username: '', password: '', role: 'CLEANER', zoneIds: [] });
+                          }}
+                          style={styles.secondaryBtn}
+                        >
+                          취소
+                        </button>
+                      )}
+                      <button type="submit" style={styles.primaryBtn}>
+                        {editingUserId ? '계정 수정' : '계정 등록'}
+                      </button>
+                    </div>
+                  </form>
+
+                  {usersList && usersList.length > 0 ? (
+                    <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                      <table style={{ ...styles.table, minWidth: '700px' }}>
+                        <thead>
+                          <tr style={styles.thRow}>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>ID</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>계정명</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>역할(Role)</th>
+                            <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>배정된 접근 가능 구역</th>
+                            <th style={{ ...styles.th, textAlign: 'center', whiteSpace: 'nowrap' }}>관리</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {usersList.map(u => (
+                            <tr key={u.id} style={styles.tr}>
+                              <td style={{ ...styles.td, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>#{u.id}</td>
+                              <td style={{ ...styles.td, fontWeight: '600', whiteSpace: 'nowrap' }}>{u.username}</td>
+                              <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>
+                                <span style={styles.statusPillSmall}>{u.role}</span>
+                              </td>
+                              <td style={{ ...styles.td, fontSize: '12px', minWidth: '180px' }}>
+                                {u.role === 'DEVELOPER'
+                                  ? '전체 구역 (최고 권한)'
+                                  : (u.zoneNames && u.zoneNames.length > 0 ? u.zoneNames.join(', ') : '미배정')}
+                              </td>
+                              <td style={{ ...styles.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                <div style={{ display: 'inline-flex', gap: '6px', whiteSpace: 'nowrap' }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEditUserClick(u)}
+                                    style={{ ...styles.actionBtnSmall, color: '#2563eb' }}
+                                  >
+                                    수정
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteUserItem(u)}
+                                    style={{ ...styles.actionBtnSmall, color: '#dc2626' }}
+                                  >
+                                    삭제
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '12px', color: '#94a3b8', padding: '12px 0' }}>등록된 시스템 계정이 없습니다.</div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -2940,19 +4582,142 @@ export default function AdminPage() {
               </div>
 
               <div style={styles.formGroup}>
-                <label style={styles.formLabel}>아두이노 기기 식별자 (deviceId)</label>
+                <label style={styles.formLabel}>아두이노 기기 식별자 (deviceId / MAC)</label>
                 <input
                   type="text"
-                  placeholder="예: WC-4F-M-01"
+                  placeholder="예: 24:DC:C3:99:AA:01 또는 WC-4F-M-01"
                   value={newRestroomDeviceId}
                   onChange={e => setNewRestroomDeviceId(e.target.value)}
                   style={styles.formInput}
                 />
               </div>
+
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>담당 청소관리인 지정 (선택)</label>
+                <select
+                  value={newRestroomWorkerId}
+                  onChange={e => setNewRestroomWorkerId(e.target.value)}
+                  style={styles.formSelect}
+                >
+                  <option value="">-- 담당자 미지정 (추후 배정 가능) --</option>
+                  {workers.map(w => (
+                    <option key={w.id} value={w.id}>
+                      {w.name} ({w.role || '위생기동반'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 현장 설치 기사 스마트폰 GPS(navigator.geolocation) 좌표 설정 */}
+              <div style={{
+                marginTop: '4px',
+                padding: '12px',
+                backgroundColor: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: '600', color: '#0f172a' }}>
+                      설치 위치 좌표 설정 (지도 핀 / 주소 검색 / GPS)
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                      지도 핀 찍기(HTTP 지원) 또는 스마트폰 GPS로 좌표를 자동 입력합니다.
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => openLocationPicker('restroom')}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '7px 12px',
+                        backgroundColor: '#059669',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        boxShadow: '0 1px 2px rgba(5, 150, 105, 0.25)'
+                      }}
+                    >
+                      <IconMapPin size={13} color="#ffffff" />
+                      <span>지도 핀 / 주소 검색</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetCurrentGpsLocation('restroom')}
+                      disabled={isGpsLocating}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '7px 12px',
+                        backgroundColor: isGpsLocating ? '#94a3b8' : '#2563eb',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        cursor: isGpsLocating ? 'wait' : 'pointer',
+                        whiteSpace: 'nowrap',
+                        boxShadow: '0 1px 2px rgba(37, 99, 235, 0.2)'
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+                      </svg>
+                      {isGpsLocating ? 'GPS 수신 중...' : '현재 GPS 위치'}
+                    </button>
+                  </div>
+                </div>
+
+                {gpsStatusMsg && (
+                  <div style={{
+                    fontSize: '11px',
+                    padding: '6px 10px',
+                    marginBottom: '8px',
+                    borderRadius: '6px',
+                    backgroundColor: gpsStatusMsg.includes('완료') ? '#f0fdf4' : '#eff6ff',
+                    color: gpsStatusMsg.includes('완료') ? '#15803d' : '#1d4ed8',
+                    border: `1px solid ${gpsStatusMsg.includes('완료') ? '#bbf7d0' : '#bfdbfe'}`
+                  }}>
+                    {gpsStatusMsg}
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label style={{ ...styles.formLabel, fontSize: '11px', marginBottom: '4px' }}>위도 (Latitude)</label>
+                    <input
+                      type="text"
+                      placeholder="예: 37.566826"
+                      value={newRestroomLat}
+                      onChange={e => setNewRestroomLat(e.target.value)}
+                      style={{ ...styles.formInput, fontFamily: 'monospace', fontSize: '12px', backgroundColor: '#ffffff' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ ...styles.formLabel, fontSize: '11px', marginBottom: '4px' }}>경도 (Longitude)</label>
+                    <input
+                      type="text"
+                      placeholder="예: 126.978656"
+                      value={newRestroomLng}
+                      onChange={e => setNewRestroomLng(e.target.value)}
+                      style={{ ...styles.formInput, fontFamily: 'monospace', fontSize: '12px', backgroundColor: '#ffffff' }}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div style={styles.modalFooter}>
-              <button onClick={() => setIsAddRestroomModalOpen(false)} style={styles.secondaryBtn}>취소</button>
+              <button onClick={() => { setIsAddRestroomModalOpen(false); setGpsStatusMsg(''); }} style={styles.secondaryBtn}>취소</button>
               <button onClick={handleAddRestroom} style={styles.primaryBtn}>등록 완료</button>
             </div>
           </div>
@@ -3059,7 +4824,7 @@ export default function AdminPage() {
                   style={styles.formSelect}
                 >
                   <option value="ALL_DELAYED">
-                    {`🚨 청소 기준 초과 구역 일괄 (${accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours).length}개소)`}
+                    {`🚨 청소 기준 초과 구역 일괄 (${accessibleRestrooms.filter(r => r.lastCleanedHours >= appliedSettings.cleanWarnHours).length}개소)`}
                   </option>
                   <option value="ALL_ACCESSIBLE">
                     {`🏢 전체 담당 구역 (${accessibleRestrooms.length}개소)`}
@@ -3067,7 +4832,7 @@ export default function AdminPage() {
                   <optgroup label="개별 화장실 구역 선택">
                     {accessibleRestrooms.map(r => (
                       <option key={r.id} value={r.id}>
-                        {r.name} ({r.floor}) - {r.lastCleanedHours == null ? '청소 기록 없음' : r.lastCleanedHours >= systemSettings.cleanWarnHours ? `⚠️ ${r.lastCleanedHours}시간 경과 (지연)` : `${r.lastCleanedHours}시간 전 청소`}
+                        {r.name} ({r.floor}) - {r.lastCleanedHours == null ? '청소 기록 없음' : r.lastCleanedHours >= appliedSettings.cleanWarnHours ? `⚠️ ${r.lastCleanedHours}시간 경과 (지연)` : `${r.lastCleanedHours}시간 전 청소`}
                       </option>
                     ))}
                   </optgroup>
@@ -3076,12 +4841,12 @@ export default function AdminPage() {
                 {/* 대상 구역 상세 정보 카드 */}
                 {dispatchTargetId === 'ALL_DELAYED' ? (
                   <div style={styles.dispatchTargetHint}>
-                    {accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours).length > 0 ? (
+                    {accessibleRestrooms.filter(r => r.lastCleanedHours >= appliedSettings.cleanWarnHours).length > 0 ? (
                       <span>
-                        지연 대상: <strong>{accessibleRestrooms.filter(r => r.lastCleanedHours >= systemSettings.cleanWarnHours).map(r => `${r.name}(${r.lastCleanedHours}시간 경과)`).join(', ')}</strong>
+                        지연 대상: <strong>{accessibleRestrooms.filter(r => r.lastCleanedHours >= appliedSettings.cleanWarnHours).map(r => `${r.name}(${r.lastCleanedHours}시간 경과)`).join(', ')}</strong>
                       </span>
                     ) : (
-                      <span>현재 {systemSettings.cleanWarnHours}시간 이상 지연된 구역이 없습니다. (전체 담당 구역으로 일괄 발령 가능)</span>
+                      <span>현재 {appliedSettings.cleanWarnHours}시간 이상 지연된 구역이 없습니다. (전체 담당 구역으로 일괄 발령 가능)</span>
                     )}
                   </div>
                 ) : (
@@ -3115,7 +4880,7 @@ export default function AdminPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSelectedCleanerIds(['cleaner1'])}
+                      onClick={() => setSelectedCleanerIds(cleanersList[0] ? [cleanersList[0].id] : ['1'])}
                       style={styles.cleanerQuickBtn}
                     >
                       기본 1인
@@ -3125,7 +4890,7 @@ export default function AdminPage() {
 
                 {/* 미화 인원 선택 그리드 */}
                 <div style={styles.cleanerGrid}>
-                  {AVAILABLE_CLEANERS.map(cleaner => {
+                  {cleanersList.map(cleaner => {
                     const isSelected = selectedCleanerIds.includes(cleaner.id);
                     return (
                       <div
@@ -3269,7 +5034,7 @@ export default function AdminPage() {
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <button
                       type="button"
-                      onClick={() => setDispatchMemo(`청소 기준 시간(${systemSettings.cleanWarnHours}시간) 초과 구역 현장 점검 및 즉시 바닥 소독 요망`)}
+                      onClick={() => setDispatchMemo(`청소 기준 시간(${appliedSettings.cleanWarnHours}시간) 초과 구역 현장 점검 및 즉시 바닥 소독 요망`)}
                       style={styles.memoQuickBtn}
                     >
                       #시간초과
@@ -3305,7 +5070,7 @@ export default function AdminPage() {
               <div style={{ fontSize: '12px', color: '#334155', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ fontWeight: '600', color: '#0f172a' }}>배정 인원:</span>
                 <span style={{ color: '#2563eb', fontWeight: '700' }}>
-                  {AVAILABLE_CLEANERS.filter(c => selectedCleanerIds.includes(c.id)).map(c => c.name).join(', ') || '없음'}
+                  {cleanersList.filter(c => selectedCleanerIds.includes(c.id)).map(c => c.name).join(', ') || '없음'}
                 </span>
                 <span style={{ color: '#64748b' }}>({selectedCleanerIds.length}명)</span>
               </div>
@@ -3337,6 +5102,801 @@ export default function AdminPage() {
                   }}
                 >
                   <IconSend size={13} /> 출동 지시 발령 ({selectedCleanerIds.length}명)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 1. 신규 구역 등록 모달 */}
+      {isAddZoneModalOpen && (
+        <div style={styles.modalOverlay} onClick={() => setIsAddZoneModalOpen(false)}>
+          <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>신규 관제 구역 등록</h3>
+              <button onClick={() => setIsAddZoneModalOpen(false)} style={styles.modalClose}>&times;</button>
+            </div>
+            <div style={styles.modalBody}>
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>구역 명칭 (건물/층/화장실)</label>
+                <input
+                  type="text"
+                  placeholder="예: 본관 3층 화장실"
+                  value={newZoneName}
+                  onChange={e => setNewZoneName(e.target.value)}
+                  style={styles.formInput}
+                />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div style={styles.formGroup}>
+                  <label style={styles.formLabel}>층수</label>
+                  <select
+                    value={newZoneFloor}
+                    onChange={e => setNewZoneFloor(e.target.value)}
+                    style={styles.formSelect}
+                  >
+                    <option value="B1F">지하 1층 (B1F)</option>
+                    <option value="1F">1층 (1F)</option>
+                    <option value="2F">2층 (2F)</option>
+                    <option value="3F">3층 (3F)</option>
+                    <option value="4F">4층 (4F)</option>
+                  </select>
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.formLabel}>구역 유형</label>
+                  <select
+                    value={newZoneType}
+                    onChange={e => setNewZoneType(e.target.value)}
+                    style={styles.formSelect}
+                  >
+                    <option value="TOILET">화장실 (TOILET)</option>
+                    <option value="SMOKING">흡연구역 (SMOKING)</option>
+                  </select>
+                </div>
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>도로명 주소</label>
+                <input
+                  type="text"
+                  placeholder="예: 서울특별시 중구 세종대로 110"
+                  value={newZoneAddress}
+                  onChange={e => setNewZoneAddress(e.target.value)}
+                  style={styles.formInput}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
+                <span style={{ fontSize: '12px', fontWeight: '600', color: '#0f172a' }}>설치 좌표 설정</span>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => openLocationPicker('zone')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '5px 10px',
+                      backgroundColor: '#059669',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <IconMapPin size={12} color="#ffffff" />
+                    <span>지도 핀 / 주소 검색</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetCurrentGpsLocation('zone')}
+                    disabled={isGpsLocating}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '5px 10px',
+                      backgroundColor: isGpsLocating ? '#94a3b8' : '#2563eb',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      cursor: isGpsLocating ? 'wait' : 'pointer'
+                    }}
+                  >
+                    {isGpsLocating ? 'GPS 수신 중...' : '현재 GPS 위치'}
+                  </button>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <div style={styles.formGroup}>
+                  <label style={styles.formLabel}>위도 (Latitude)</label>
+                  <input
+                    type="text"
+                    value={newZoneLat}
+                    onChange={e => setNewZoneLat(e.target.value)}
+                    style={styles.formInput}
+                  />
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.formLabel}>경도 (Longitude)</label>
+                  <input
+                    type="text"
+                    value={newZoneLng}
+                    onChange={e => setNewZoneLng(e.target.value)}
+                    style={styles.formInput}
+                  />
+                </div>
+              </div>
+            </div>
+            <div style={styles.modalFooter}>
+              <button onClick={() => setIsAddZoneModalOpen(false)} style={styles.secondaryBtn}>취소</button>
+              <button onClick={handleCreateZone} style={styles.primaryBtn}>구역 생성 완료</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 1-2. 구역 수정 모달 (PATCH /api/dev/zones/{id}) */}
+      {isEditZoneModalOpen && editingZone && (
+        <div style={styles.modalOverlay} onClick={() => setIsEditZoneModalOpen(false)}>
+          <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>모니터링 구역(Zone) 정보 및 좌표 수정</h3>
+              <button onClick={() => setIsEditZoneModalOpen(false)} style={styles.modalClose}>&times;</button>
+            </div>
+            <div style={styles.modalBody}>
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>구역 명칭 (Zone Name)</label>
+                <input
+                  type="text"
+                  value={editingZone.name}
+                  onChange={e => setEditingZone({ ...editingZone, name: e.target.value })}
+                  style={styles.formInput}
+                />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>설치 주소 및 설명</label>
+                <textarea
+                  value={editingZone.address || ''}
+                  maxLength={255} onChange={e => setEditingZone({ ...editingZone, address: e.target.value })}
+                  style={{ ...styles.formInput, height: '60px', resize: 'none' }}
+                />
+              </div>
+              <div style={styles.formGroup}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label style={styles.formLabel}>설치된 아두이노(ESP32) MAC 주소 (기기 ID)</label>
+                  {discoveredDevices && discoveredDevices.length > 0 && (
+                    <span style={{ fontSize: '11px', color: '#b45309', fontWeight: '600' }}>
+                      📡 감지된 새 기기 {discoveredDevices.length}대 있음
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="예: 24:DC:C3:99:AA:01 (ESP32 MAC 주소)"
+                    value={editingZone.macAddress || ''}
+                    onChange={e => setEditingZone({ ...editingZone, macAddress: e.target.value })}
+                    style={{ ...styles.formInput, fontFamily: 'monospace', flex: 1 }}
+                  />
+                  {discoveredDevices && discoveredDevices.length > 0 && (
+                    <select
+                      style={{ ...styles.formSelect, width: 'auto', maxWidth: '210px', fontSize: '11px' }}
+                      onChange={e => {
+                        if (e.target.value) {
+                          setEditingZone({ ...editingZone, macAddress: e.target.value });
+                        }
+                      }}
+                      value=""
+                    >
+                      <option value="">-- 감지된 기기 선택 --</option>
+                      {discoveredDevices.map(d => (
+                        <option key={d.macAddress} value={d.macAddress}>
+                          {d.macAddress} {d.latitude ? '📍' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <span style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'block' }}>
+                  아두이노 보드를 교체했거나 새로 연결할 때 변경할 MAC 주소를 입력하세요.
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
+                <label style={styles.formLabel}>설치 위치 좌표 설정</label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => openLocationPicker('editZone')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '5px 10px',
+                      backgroundColor: '#059669',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <IconMapPin size={12} color="#ffffff" />
+                    <span>지도 핀 / 주소 검색</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetCurrentGpsLocation('editZone')}
+                    disabled={isGpsLocating}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '5px 10px',
+                      backgroundColor: isGpsLocating ? '#94a3b8' : '#2563eb',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      cursor: isGpsLocating ? 'wait' : 'pointer'
+                    }}
+                  >
+                    {isGpsLocating ? 'GPS 수신 중...' : '현재 GPS 위치'}
+                  </button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ ...styles.formGroup, flex: 1 }}>
+                  <label style={styles.formLabel}>위도 (Lat)</label>
+                  <input
+                    type="text"
+                    value={editingZone.lat ?? editingZone.latitude ?? ''}
+                    onChange={e => setEditingZone({ ...editingZone, lat: e.target.value, latitude: e.target.value })}
+                    style={{ ...styles.formInput, fontFamily: 'monospace' }}
+                  />
+                </div>
+                <div style={{ ...styles.formGroup, flex: 1 }}>
+                  <label style={styles.formLabel}>경도 (Lng)</label>
+                  <input
+                    type="text"
+                    value={editingZone.lng ?? editingZone.longitude ?? ''}
+                    onChange={e => setEditingZone({ ...editingZone, lng: e.target.value, longitude: e.target.value })}
+                    style={{ ...styles.formInput, fontFamily: 'monospace' }}
+                  />
+                </div>
+              </div>
+            </div>
+            <div style={styles.modalFooter}>
+              <button onClick={() => setIsEditZoneModalOpen(false)} style={styles.secondaryBtn}>취소</button>
+              <button onClick={handleSaveEditZone} style={styles.primaryBtn}>구역 수정 저장</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. 기기 세트 수정 모달 (PATCH /api/admin/device-sets/{id} 또는 신규 등록) */}
+      {isEditDeviceSetModalOpen && editingDeviceSet && (
+        <div style={styles.modalOverlay} onClick={() => setIsEditDeviceSetModalOpen(false)}>
+          <div style={styles.modalContent} onClick={e => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#0f172a' }}>
+                  {editingDeviceSet.id ? '아두이노 설치 위치(구역) 및 ESP32 MAC 주소 변경' : '신규 아두이노 기기(ESP32) 매핑 등록'}
+                </h3>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>
+                  설치한 아두이노의 화장실 위치를 다른 구역으로 이동하거나, 보드 교체 시 새로운 ESP32 MAC 주소를 지정합니다.
+                </span>
+              </div>
+              <button onClick={() => setIsEditDeviceSetModalOpen(false)} style={styles.modalClose}>&times;</button>
+            </div>
+            <div style={styles.modalBody}>
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>설치 화장실 / 관제 구역 (위치 변경)</label>
+                <select
+                  value={editingDeviceSet.zoneId}
+                  onChange={e => setEditingDeviceSet({ ...editingDeviceSet, zoneId: e.target.value })}
+                  style={styles.formSelect}
+                >
+                  {accessibleRestrooms.map(r => (
+                    <option key={r.id} value={r.id}>{r.name} ({r.floor}) - 구역 #{r.id}</option>
+                  ))}
+                </select>
+                <span style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'block' }}>
+                  다른 화장실로 기기를 이전 설치했을 때 이 목록에서 이동할 구역을 선택하세요.
+                </span>
+              </div>
+              <div style={styles.formGroup}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <label style={styles.formLabel}>ESP32 MAC 주소 (아두이노 기기 ID 변경)</label>
+                  {discoveredDevices && discoveredDevices.length > 0 && (
+                    <span style={{ fontSize: '11px', color: '#b45309', fontWeight: '600' }}>
+                      📡 감지된 새 기기 {discoveredDevices.length}대 있음
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="예: 24:DC:C3:99:AA:01"
+                    value={editingDeviceSet.macAddress || ''}
+                    onChange={e => setEditingDeviceSet({ ...editingDeviceSet, macAddress: e.target.value })}
+                    style={{ ...styles.formInput, fontFamily: 'monospace', flex: 1 }}
+                  />
+                  {discoveredDevices && discoveredDevices.length > 0 && (
+                    <select
+                      style={{ ...styles.formSelect, width: 'auto', maxWidth: '210px', fontSize: '11px' }}
+                      onChange={e => {
+                        if (e.target.value) {
+                          setEditingDeviceSet({ ...editingDeviceSet, macAddress: e.target.value });
+                        }
+                      }}
+                      value=""
+                    >
+                      <option value="">-- 감지된 기기 선택 --</option>
+                      {discoveredDevices.map(d => (
+                        <option key={d.macAddress} value={d.macAddress}>
+                          {d.macAddress} {d.latitude ? '📍' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <span style={{ fontSize: '11px', color: '#64748b', marginTop: '3px', display: 'block' }}>
+                  보드가 고장나 교체했거나 주소를 변경할 때 새 ESP32 MAC 주소를 입력하세요.
+                </span>
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>설치 라벨 명칭</label>
+                <input
+                  type="text"
+                  placeholder="예: 1F 남자 화장실 메인 센서"
+                  value={editingDeviceSet.label}
+                  onChange={e => setEditingDeviceSet({ ...editingDeviceSet, label: e.target.value })}
+                  style={styles.formInput}
+                />
+              </div>
+            </div>
+            <div style={styles.modalFooter}>
+              <button onClick={() => setIsEditDeviceSetModalOpen(false)} style={styles.secondaryBtn}>취소</button>
+              <button onClick={handleSaveEditDeviceSet} style={styles.primaryBtn}>
+                {editingDeviceSet.id ? '위치 / MAC 주소 수정 저장' : '기기 매핑 등록 완료'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. 기기 세트 감사 히스토리 모달 (GET /api/admin/device-sets/{id}/history) */}
+      {isHistoryModalOpen && (
+        <div style={styles.modalOverlay} onClick={() => setIsHistoryModalOpen(false)}>
+          <div style={{ ...styles.modalContent, maxWidth: '640px' }} onClick={e => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>
+                  [{historyDeviceSetTitle}] 기기 변경 및 이전 감사 히스토리
+                </h3>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>
+                  기기의 설치 위치 및 라벨 변경 감사 추적 기록입니다.
+                </span>
+              </div>
+              <button onClick={() => setIsHistoryModalOpen(false)} style={styles.modalClose}>&times;</button>
+            </div>
+            <div style={{ ...styles.modalBody, maxHeight: '350px', overflowY: 'auto' }}>
+              {deviceSetHistories.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '30px 0', color: '#64748b', fontSize: '12px' }}>
+                  기록된 변경 이력이 없습니다.
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                  <table style={{ ...styles.table, minWidth: '500px' }}>
+                    <thead>
+                      <tr style={styles.thRow}>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>변경 시각</th>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>세트 코드</th>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>설치 라벨</th>
+                        <th style={{ ...styles.th, whiteSpace: 'nowrap' }}>배치 구역</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {deviceSetHistories.map(h => (
+                        <tr key={h.historyId} style={styles.tr}>
+                          <td style={{ ...styles.td, fontSize: '11px', whiteSpace: 'nowrap' }}>
+                            {h.changedAt ? parseUtcDate(h.changedAt).toLocaleString('ko-KR') : '-'}
+                          </td>
+                          <td style={{ ...styles.td, fontFamily: 'monospace', fontSize: '11px', whiteSpace: 'nowrap' }}>{h.setCode}</td>
+                          <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{h.installationLabel}</td>
+                          <td style={{ ...styles.td, whiteSpace: 'nowrap' }}>{h.zoneName || `구역 #${h.zoneId}`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div style={styles.modalFooter}>
+              <button onClick={() => setIsHistoryModalOpen(false)} style={styles.primaryBtn}>닫기</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. 센서 단독 등록 모달 (POST /api/dev/sensors) */}
+      {isAddSensorModalOpen && (
+        <div style={styles.modalOverlay} onClick={() => setIsAddSensorModalOpen(false)}>
+          <div style={{ ...styles.modalContent, maxWidth: '480px' }} onClick={e => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: '600' }}>센서 단독 추가 등록 (POST /api/dev/sensors)</h3>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>
+                  지정 구역(Zone)에 독립 센서(온습도, 악취가스, 도어 마그네틱)를 단독 추가합니다.
+                </span>
+              </div>
+              <button onClick={() => setIsAddSensorModalOpen(false)} style={styles.modalClose}>&times;</button>
+            </div>
+            <div style={styles.modalBody}>
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>설치 대상 구역 (Zone)</label>
+                <select
+                  value={newSensorData.zoneId}
+                  onChange={e => setNewSensorData({ ...newSensorData, zoneId: e.target.value })}
+                  style={styles.formSelect}
+                >
+                  <option value="">-- 설치 구역 선택 --</option>
+                  {accessibleRestrooms.map(r => (
+                    <option key={r.id} value={r.id}>{r.name} ({r.floor}) - 구역 #{r.id}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.formLabel}>센서 종류 (Sensor Type)</label>
+                <select
+                  value={newSensorData.sensorType}
+                  onChange={e => setNewSensorData({ ...newSensorData, sensorType: e.target.value })}
+                  style={styles.formSelect}
+                >
+                  {SENSOR_TYPES.map(type=><option key={type.value} value={type.value}>{type.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={styles.modalFooter}>
+              <button onClick={() => setIsAddSensorModalOpen(false)} style={styles.secondaryBtn}>취소</button>
+              <button onClick={handleCreateSensor} style={styles.primaryBtn}>센서 등록 완료</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. 청소관리인 등록 및 구역 담당자 배정 모달 */}
+      {isWorkerModalOpen && (
+        <div style={styles.modalOverlay} onClick={() => setIsWorkerModalOpen(false)}>
+          <div
+            style={{
+              ...styles.modalContent,
+              maxWidth: '1040px',
+              width: '94vw',
+              maxHeight: '88vh',
+              display: 'flex',
+              flexDirection: 'column'
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={styles.modalHeader}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <IconUsers size={16} color="#2563eb" /> 청소관리인 등록 및 구역별 담당자 배정 관리
+                </h3>
+                <span style={{ fontSize: '12px', color: '#64748b' }}>
+                  신규 청소관리인을 등록·수정·삭제하고 각 화장실 구역의 전담 담당자를 즉시 배정합니다.
+                </span>
+              </div>
+              <button onClick={() => setIsWorkerModalOpen(false)} style={styles.modalClose}>&times;</button>
+            </div>
+            <div style={{ ...styles.modalBody, overflowY: 'auto', padding: '16px' }}>
+              {renderWorkerManagementSection()}
+            </div>
+            <div style={styles.modalFooter}>
+              <button onClick={() => setIsWorkerModalOpen(false)} style={styles.primaryBtn}>닫기</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. 웹 지도 핀 찍기 및 주소 검색 위치 선택기 모달 (옵션 ③ - HTTP 완벽 지원) */}
+      {isLocationPickerOpen && (
+        <div
+          style={{
+            ...styles.modalOverlay,
+            zIndex: 10000,
+            backgroundColor: 'rgba(15, 23, 42, 0.65)'
+          }}
+          onClick={() => setIsLocationPickerOpen(false)}
+        >
+          <div
+            style={{
+              ...styles.modalContent,
+              width: '92vw',
+              maxWidth: '820px',
+              height: '88vh',
+              maxHeight: '740px',
+              display: 'flex',
+              flexDirection: 'column',
+              padding: 0,
+              overflow: 'hidden',
+              borderRadius: '12px',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.2)'
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* 헤더 */}
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: '1px solid #e2e8f0',
+                backgroundColor: '#ffffff',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <IconMapPin size={18} color="#059669" />
+                  지도 핀 찍기 &amp; 주소 검색
+                  <span style={{ fontSize: '11px', fontWeight: '600', backgroundColor: '#ecfdf5', color: '#059669', padding: '2px 8px', borderRadius: '12px', border: '1px solid #a7f3d0' }}>
+                    HTTP 환경 지원
+                  </span>
+                </h3>
+                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
+                  건물명이나 도로명을 검색하거나, 지도의 설치 위치를 직접 클릭하여 핀을 지정하세요.
+                </div>
+              </div>
+              <button
+                onClick={() => setIsLocationPickerOpen(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '22px',
+                  color: '#94a3b8',
+                  cursor: 'pointer',
+                  padding: '4px 8px',
+                  lineHeight: 1
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* 검색창 바 */}
+            <div
+              style={{
+                padding: '12px 20px',
+                backgroundColor: '#f8fafc',
+                borderBottom: '1px solid #e2e8f0'
+              }}
+            >
+              <form
+                onSubmit={handlePickerSearch}
+                style={{ display: 'flex', gap: '8px', alignItems: 'center' }}
+              >
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <input
+                    type="text"
+                    value={pickerSearchKeyword}
+                    onChange={e => setPickerSearchKeyword(e.target.value)}
+                    placeholder="건물명, 시설명 또는 도로명 주소 검색 (예: 종로구청, 서울역 화장실)"
+                    style={{
+                      width: '100%',
+                      padding: '9px 12px 9px 36px',
+                      fontSize: '13px',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      outline: 'none',
+                      backgroundColor: '#ffffff',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                  <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', fontSize: '14px', color: '#94a3b8' }}>
+                    🔍
+                  </span>
+                </div>
+                <button
+                  type="submit"
+                  disabled={isSearchingPlaces}
+                  style={{
+                    padding: '9px 18px',
+                    backgroundColor: isSearchingPlaces ? '#94a3b8' : '#2563eb',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    cursor: isSearchingPlaces ? 'wait' : 'pointer',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {isSearchingPlaces ? '검색 중...' : '검색'}
+                </button>
+              </form>
+
+              {/* 검색 결과 칩 리스트 */}
+              {pickerSearchResults.length > 0 && (
+                <div
+                  style={{
+                    marginTop: '10px',
+                    display: 'flex',
+                    gap: '6px',
+                    overflowX: 'auto',
+                    paddingBottom: '4px'
+                  }}
+                >
+                  {pickerSearchResults.slice(0, 6).map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleSelectSearchResult(item)}
+                      style={{
+                        padding: '5px 10px',
+                        backgroundColor: '#ffffff',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '16px',
+                        fontSize: '11px',
+                        color: '#334155',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        transition: 'all 0.15s ease'
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = '#2563eb'; e.currentTarget.style.color = '#2563eb'; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = '#cbd5e1'; e.currentTarget.style.color = '#334155'; }}
+                    >
+                      <span>📍</span>
+                      <strong style={{ fontWeight: '600' }}>{item.name}</strong>
+                      <span style={{ color: '#94a3b8', fontSize: '10px' }}>({item.address || '주소 정보'})</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 지도 본문 */}
+            <div style={{ flex: 1, position: 'relative', minHeight: '280px' }}>
+              <Map
+                center={pickerMapCenter}
+                style={{ width: '100%', height: '100%' }}
+                level={3}
+                onClick={(_map, mouseEvent) => {
+                  if (!mouseEvent || !mouseEvent.latLng) return;
+                  const lat = mouseEvent.latLng.getLat();
+                  const lng = mouseEvent.latLng.getLng();
+                  setPickerLat(lat);
+                  setPickerLng(lng);
+                  reverseGeocode(lat, lng);
+                }}
+              >
+                <MapMarker
+                  position={{ lat: pickerLat, lng: pickerLng }}
+                  draggable={true}
+                  onDragEnd={(marker) => {
+                    const lat = marker.getPosition().getLat();
+                    const lng = marker.getPosition().getLng();
+                    setPickerLat(lat);
+                    setPickerLng(lng);
+                    reverseGeocode(lat, lng);
+                  }}
+                />
+                <CustomOverlayMap
+                  position={{ lat: pickerLat, lng: pickerLng }}
+                  yAnchor={2.3}
+                >
+                  <div
+                    style={{
+                      backgroundColor: '#1e293b',
+                      color: '#ffffff',
+                      padding: '5px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      boxShadow: '0 4px 10px rgba(0,0,0,0.3)',
+                      whiteSpace: 'nowrap',
+                      pointerEvents: 'none',
+                      border: '1px solid #334155'
+                    }}
+                  >
+                    📍 선택된 센서 설치 위치
+                  </div>
+                </CustomOverlayMap>
+              </Map>
+
+              {/* 지도 안내 툴팁 */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '12px',
+                  left: '12px',
+                  zIndex: 2,
+                  backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: '500',
+                  color: '#475569',
+                  boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+                  backdropFilter: 'blur(4px)',
+                  border: '1px solid #e2e8f0',
+                  pointerEvents: 'none'
+                }}
+              >
+                💡 지도를 클릭하거나 핀을 드래그하여 정확한 설치 지점을 맞춰주세요.
+              </div>
+            </div>
+
+            {/* 하단 선택 정보 및 확정 바 */}
+            <div
+              style={{
+                padding: '14px 20px',
+                borderTop: '1px solid #e2e8f0',
+                backgroundColor: '#ffffff',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '12px'
+              }}
+            >
+              <div style={{ flex: 1, minWidth: '240px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: '700', color: '#64748b' }}>선택 좌표:</span>
+                  <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: '700', color: '#0f172a' }}>
+                    {Number(pickerLat).toFixed(6)}, {Number(pickerLng).toFixed(6)}
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: '#475569', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontWeight: '600', color: '#64748b' }}>주소: </span>
+                  {pickerAddress || '지도를 클릭하여 주소를 확인하세요'}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsLocationPickerOpen(false)}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    color: '#64748b',
+                    cursor: 'pointer'
+                  }}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmLocationPicker}
+                  style={{
+                    padding: '8px 20px',
+                    backgroundColor: '#059669',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: '700',
+                    color: '#ffffff',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 4px rgba(5, 150, 105, 0.25)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <span>✓</span> 이 위치로 좌표 확정
                 </button>
               </div>
             </div>
@@ -3487,6 +6047,7 @@ const styles = {
   },
   toolbar: {
     display: 'flex',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: '12px',
@@ -3499,6 +6060,7 @@ const styles = {
   },
   toolbarTitle: {
     display: 'flex',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: '6px',
     fontSize: '13px',
@@ -3508,8 +6070,8 @@ const styles = {
   },
   toolbarActions: {
     display: 'flex',
-    gap: '8px',
-    flexShrink: 0
+    flexWrap: 'wrap',
+    gap: '8px'
   },
   panelEmpty: {
     padding: '24px 12px',
@@ -3558,12 +6120,16 @@ const styles = {
     border: '1px solid #e2e8f0',
     marginBottom: '16px',
     display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
     alignItems: 'center',
     justifyContent: 'space-between',
     boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)'
   },
   filterGroup: {
     display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
     alignItems: 'center'
   },
   filterLabel: {
@@ -3582,8 +6148,6 @@ const styles = {
     backgroundColor: '#fff'
   },
   dashboardBody: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) 300px',
     gap: '16px'
   },
   leftCol: {
@@ -3794,6 +6358,7 @@ const styles = {
   },
   chartHeader: {
     display: 'flex',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: '10px',
@@ -3856,6 +6421,8 @@ const styles = {
   },
   panelHeader: {
     display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: '10px'
@@ -3951,11 +6518,11 @@ const styles = {
   },
   cleaningStatusTicker: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-    gap: '8px'
+    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+    gap: '10px'
   },
   tickerCard: {
-    padding: '8px 10px',
+    padding: '10px 12px',
     borderRadius: '8px'
   },
   cleanBtnSubmit: {
@@ -3996,6 +6563,7 @@ const styles = {
   },
   subTabNav: {
     display: 'flex',
+    flexWrap: 'wrap',
     gap: '4px',
     marginBottom: '16px',
     borderBottom: '1px solid #e2e8f0',
@@ -4074,6 +6642,8 @@ const styles = {
   },
   systemRow: {
     display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingBottom: '12px',
@@ -4128,6 +6698,8 @@ const styles = {
   },
   pageHeader: {
     display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: '14px'
@@ -4204,7 +6776,7 @@ const styles = {
   },
   modalContent: {
     backgroundColor: '#ffffff',
-    width: '380px',
+    width: 'min(420px, 92vw)',
     borderRadius: '8px',
     overflow: 'hidden',
     boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
@@ -4329,6 +6901,8 @@ const styles = {
     borderTop: '1px solid #e2e8f0',
     backgroundColor: '#f8fafc',
     display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
     justifyContent: 'space-between',
     alignItems: 'center'
   },
@@ -4367,7 +6941,7 @@ const styles = {
   },
   cleanerGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(2, 1fr)',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
     gap: '8px'
   },
   cleanerCard: {

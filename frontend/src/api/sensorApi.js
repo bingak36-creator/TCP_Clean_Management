@@ -1,11 +1,11 @@
+import { parseUtcDate } from './backendApi';
+import { getAuthHeaders } from './backendApi';
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
 async function getJson(path, signal) {
   const response = await fetch(`${API_BASE}${path}`, {
     signal,
-    headers: {
-      'ngrok-skip-browser-warning': 'true'
-    }
+    headers: getAuthHeaders()
   });
   if (!response.ok) throw new Error(`센서 데이터 조회 실패 (HTTP ${response.status})`);
   return response.json();
@@ -38,16 +38,17 @@ export function snapshotToRestroom(device, index = 0) {
     gas: device.mq135Adc,
     mq7: device.mq7Adc,
     status: device.stale ? 'OFFLINE' : 'RECEIVING',
-    isActive: !device.stale,
+    isActive: device.active !== false,
+    stale: device.stale,
     isLive: true,
     source: device.source,
     ingestSource: device.ingestSource,
     measuredAt: device.measuredAt,
-    lastUpdated: device.measuredAt ? new Date(device.measuredAt).toLocaleTimeString('ko-KR') : '측정 없음',
+    lastUpdated: device.measuredAt ? parseUtcDate(device.measuredAt).toLocaleTimeString('ko-KR') : '측정 없음',
     lastCleanedHours: 1.5,
     cleanWorker: '이순신',
-    lat: device.latitude ?? 37.5668,
-    lng: device.longitude ?? 126.9785
+    lat: device.latitude ?? null,
+    lng: device.longitude ?? null
   };
 }
 

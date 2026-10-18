@@ -14,6 +14,7 @@ import com.tcp.cleanmanagement.repository.DeviceSetRepository;
 import com.tcp.cleanmanagement.repository.DeviceSetHistoryRepository;
 import com.tcp.cleanmanagement.repository.SensorDataRawRepository;
 import com.tcp.cleanmanagement.repository.AlertRepository;
+import com.tcp.cleanmanagement.repository.AiPredictionRepository;
 import com.tcp.cleanmanagement.repository.SensorRepository;
 import com.tcp.cleanmanagement.repository.ZoneRepository;
 import lombok.RequiredArgsConstructor;
@@ -31,11 +32,14 @@ import java.time.ZoneOffset;
 @RequiredArgsConstructor
 public class DeviceSetService {
     private final DeviceSetRepository deviceSetRepository;
+    private final com.tcp.cleanmanagement.repository.DeviceCredentialRepository credentials;
     private final SensorRepository sensorRepository;
     private final ZoneRepository zoneRepository;
     private final DeviceSetHistoryRepository historyRepository;
     private final SensorDataRawRepository rawRepository;
     private final AlertRepository alertRepository;
+    private final AiPredictionRepository aiPredictionRepository;
+    private final com.tcp.cleanmanagement.repository.UpstashDeviceRepository imported;
 
     @Transactional
     public DeviceSetResponse register(DeviceSetRequest request) {
@@ -66,6 +70,9 @@ public class DeviceSetService {
         Zone zone = zoneRepository.findById(request.getZoneId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Zone not found"));
 
+        var legacy=imported.findById(mac).orElse(null);
+        if(legacy!=null && (!legacy.currentBinding()||!legacy.getZone().getId().equals(zone.getId())))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"Register the imported device in its existing zone before relocating it");
         Map<Long, Sensor> attached = new HashMap<>();
         if (existingIds != null) {
             // Lock in ID order so registrations sharing sensors cannot acquire locks in opposite order.
@@ -94,12 +101,21 @@ public class DeviceSetService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Set code or MAC address is already registered", error);
         }
         for (SensorModel model : SensorModel.values()) {
-            Sensor sensor = existingIds == null
-                    ? Sensor.builder().zone(zone).sensorType(model.sensorType()).status(SensorStatus.ACTIVE).build()
-                    : attached.get(existingIds.get(model));
-            sensor.setDeviceSet(set);
-            sensor.setSensorModel(model);
-            sensorRepository.save(sensor);
+            Sensor legacySensor=legacy==null?null:switch(model) {
+                case DHT22 -> legacy.getTemperatureHumiditySensor();
+                case MQ135 -> legacy.getGasSensor();
+                case MQ7 -> legacy.getMq7Sensor();
+            };
+            Sensor sensor=existingIds!=null?attached.get(existingIds.get(model)):legacySensor;
+            if(legacySensor!=null && sensor!=null && !legacySensor.getId().equals(sensor.getId()))
+                throw new ResponseStatusException(HttpStatus.CONFLICT,"Existing imported sensor IDs must be preserved");
+            if(sensor==null) sensor=Sensor.builder().zone(zone).sensorType(model.sensorType()).status(SensorStatus.ACTIVE).build();
+            if(sensor.getZone()==null || !sensor.getZone().getId().equals(zone.getId()) ||
+                sensor.getSensorType()!=model.sensorType() || sensor.getSensorModel()!=null&&sensor.getSensorModel()!=model)
+                throw new ResponseStatusException(HttpStatus.CONFLICT,"Imported sensor zone or model does not match the installation");
+            if(sensor.getDeviceSet()!=null)
+                throw new ResponseStatusException(HttpStatus.CONFLICT,"Imported sensor is already installed");
+            sensor.setDeviceSet(set);sensor.setSensorModel(model);sensorRepository.save(sensor);
         }
         sensorRepository.flush();
         initializeHistory(set);
@@ -133,12 +149,15 @@ public class DeviceSetService {
                     throw new ResponseStatusException(HttpStatus.CONFLICT, "MAC address belongs to another set");
                 });
 
+        if(!set.getMacAddress().equals(mac) && imported.existsById(mac))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"MAC is already assigned to an imported device");
         if (set.getZone().getId().equals(zone.getId()) && set.getMacAddress().equals(mac)
                 && set.getInstallationLabel().equals(label)) {
             return responseFor(set);
         }
         // Backfill a baseline for an older installation before changing its metadata.
         initializeHistory(set);
+        if(!set.getMacAddress().equals(mac)) credentials.findById(set.getMacAddress()).ifPresent(key->key.setEnabled(false));
         set.setZone(zone);
         set.setMacAddress(mac);
         set.setInstallationLabel(label);
@@ -164,6 +183,29 @@ public class DeviceSetService {
                         .zoneId(entry.getZone().getId()).zoneName(entry.getZoneName())
                         .installationLabel(entry.getInstallationLabel()).changedAt(entry.getChangedAt()).build())
                 .toList();
+    }
+
+    @Transactional
+    public void delete(Long deviceSetId) {
+        // Keep the same lock order as ingestion and metadata updates.
+        List<Sensor> sensors = sensorRepository.findByDeviceSetIdForUpdate(deviceSetId);
+        DeviceSet set = deviceSetRepository.findByIdForUpdate(deviceSetId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Device set not found"));
+        // These installation snapshots are also referenced after raw data expires.
+        if (rawRepository.existsByDeviceSetHistoryDeviceSetId(deviceSetId)
+                || alertRepository.existsByDeviceSetHistoryDeviceSetId(deviceSetId)
+                || aiPredictionRepository.existsByDeviceSetHistoryDeviceSetId(deviceSetId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "측정, 알림 또는 AI 예측 이력이 있는 기기는 삭제할 수 없습니다. 구역 비활성화를 사용해주세요.");
+        }
+        for (Sensor sensor : sensors) {
+            sensor.setDeviceSet(null);
+            sensorRepository.save(sensor);
+        }
+        historyRepository.findByDeviceSetIdOrderByIdDesc(deviceSetId)
+                .forEach(historyRepository::delete);
+        credentials.findById(set.getMacAddress()).ifPresent(key->key.setEnabled(false));
+        deviceSetRepository.delete(set);
     }
 
     private void initializeHistory(DeviceSet set) {

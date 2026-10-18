@@ -18,11 +18,13 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
 
 @ExtendWith(MockitoExtension.class)
 class PublicZoneServiceTest {
     @Mock ZoneRepository zoneRepository;
     @Mock SensorDataRawRepository rawRepository;
+    @org.mockito.Spy OperationalSettingsService settings = new OperationalSettingsService(org.mockito.Mockito.mock(com.tcp.cleanmanagement.repository.SystemSettingRepository.class));
     @InjectMocks PublicZoneService service;
 
     @Test
@@ -38,17 +40,17 @@ class PublicZoneServiceTest {
         assertEquals(10.0f, response.getGasLevel());
         assertEquals(22.5f, response.getTemp());
         assertEquals(61.2f, response.getHumidity());
-        assertEquals("Clean", response.getStatus());
+        assertEquals("NORMAL", response.getStatus());
     }
 
     @Test
     void temperatureWithoutGasDoesNotFabricateGasOrHumidity() {
         when(zoneRepository.findAll()).thenReturn(List.of(Zone.builder()
                 .id(1L).zoneType(ZoneType.TOILET).pleasantThreshold(50.0f).build()));
-        when(rawRepository.findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(1L, MetricCode.GAS))
-                .thenReturn(Optional.empty());
-        when(rawRepository.findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(1L, MetricCode.HUMIDITY))
-                .thenReturn(Optional.empty());
+        when(rawRepository.latestCurrentMetric(eq(1L),eq(MetricCode.GAS),any()))
+                .thenReturn(List.of());
+        when(rawRepository.latestCurrentMetric(eq(1L),eq(MetricCode.HUMIDITY),any()))
+                .thenReturn(List.of());
         stubReading(MetricCode.TEMPERATURE, "80");
 
         var response = service.getZones(null, null, null, null).get(0);
@@ -56,16 +58,16 @@ class PublicZoneServiceTest {
         assertEquals(80.0f, response.getTemp());
         assertNull(response.getGasLevel());
         assertNull(response.getHumidity());
-        assertEquals("No Data", response.getStatus());
+        assertEquals("DANGER", response.getStatus());
     }
 
     @Test
     void exposesMq7SensorReadingWhenPresent() {
         when(zoneRepository.findAll()).thenReturn(List.of(Zone.builder()
                 .id(1L).zoneType(ZoneType.TOILET).pleasantThreshold(50.0f).build()));
-        when(rawRepository.findFirstByMetricSensorZoneIdAndMetricSensorSensorModelOrderByMeasuredAtDescIdDesc(
-                1L, com.tcp.cleanmanagement.enums.SensorModel.MQ7))
-                .thenReturn(Optional.of(SensorDataRaw.builder().measuredValue(new BigDecimal("123.4")).build()));
+        when(rawRepository.latestCurrentModel(eq(1L),eq(com.tcp.cleanmanagement.enums.SensorModel.MQ135),any())).thenReturn(List.of());
+        when(rawRepository.latestCurrentModel(eq(1L),eq(com.tcp.cleanmanagement.enums.SensorModel.MQ7),any()))
+                .thenReturn(List.of(SensorDataRaw.builder().measuredValue(new BigDecimal("123.4")).measuredAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).build()));
         stubReading(MetricCode.GAS, "15.0");
 
         var response = service.getZones(null, null, null, null).get(0);
@@ -74,7 +76,7 @@ class PublicZoneServiceTest {
     }
 
     private void stubReading(MetricCode code, String value) {
-        when(rawRepository.findFirstByMetricSensorZoneIdAndMetricMetricCodeOrderByMeasuredAtDescIdDesc(1L, code))
-                .thenReturn(Optional.of(SensorDataRaw.builder().measuredValue(new BigDecimal(value)).build()));
+        when(rawRepository.latestCurrentMetric(eq(1L),eq(code),any()))
+                .thenReturn(List.of(SensorDataRaw.builder().measuredValue(new BigDecimal(value)).measuredAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).build()));
     }
 }

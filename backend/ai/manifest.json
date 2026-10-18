@@ -1,0 +1,19 @@
+{
+  "model_version": "environment-v3-indoor-22-mixed",
+  "source": "workspace result/ snapshot, 2026-10-17",
+  "sha256": {
+    "restroom_ai/__init__.py": "39cc4486410dbb5bffb52e9af8294b9eaf1142d8426ff1aa22a08dce2bdf47fe",
+    "restroom_ai/paths.py": "170f9dbb1a4b645031f07ff4f906b7645e0bd4ccd2fc3a6d82a825fa96ed2e3a",
+    "restroom_ai/environment.py": "f3cc479a27ec3f3c629158ab55d4ee2a0bd7f65a037e9cae7c2b5947689897da",
+    "restroom_ai/sensors.py": "071f19965ffc0b5caecda995b6b1ffe91c03e7b410784ac85bb2915ce304d140",
+    "restroom_ai/integrate.py": "0a1bd0f29c4204865cfc2a4c234befbd46067c5b0c0d27166aecd07dff3ce0e1",
+    "restroom_ai/model.py": "cdd8ebaaad35169e6a666e2a292a476ce12bf1bb228b7d5ea6d3022d661668e3",
+    "restroom_ai/smoking_detector.py": "d5b268238399293f70dc8ab58428a5c00d4c4bb3ecac1016fd88edffcb1c33a5",
+    "restroom_ai/duo.py": "a4fd2611c02cff85b49c69561379e1b2ba13298ac6ca118a459e626da5d0efc3",
+    "models/environment/faucet_on_hist_gradient_boosting.joblib": "64cd4ea31dd1f8f2899cacb4ba2131febfbf4d4c2bed0b1d6227798fd59da88e",
+    "models/environment/freeze_risk_1h_hist_gradient_boosting.joblib": "4df132f0aef1ba32a12a6b9d889bc51aaa5b608e1a7455d79954f4caf44add4e",
+    "models/environment/freeze_risk_3h_hist_gradient_boosting.joblib": "f509f80203315ae3997e1599ddefc121c7d96d947c48b5cb228d66d400fff969",
+    "models/environment/leak_active_hist_gradient_boosting.joblib": "0dd63d1f782d7550e78b2d7baaaed32cc31dc91ac4d29e4ebe80e0567e6d1379",
+    "models/environment/window_open_hist_gradient_boosting.joblib": "1793856c40a7647002240a3e032d3d3cbf9e06610113e9bbfb517939cb7c9c65"
+  }
+}

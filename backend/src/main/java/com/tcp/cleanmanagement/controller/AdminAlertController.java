@@ -14,17 +14,34 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AdminAlertController {
     private final AdminAlertService adminAlertService;
+    private final com.tcp.cleanmanagement.security.AccessService access;
 
     @GetMapping
-    public ResponseEntity<List<AlertResponse>> getUnresolvedAlerts() {
-        return ResponseEntity.ok(adminAlertService.getUnresolvedAlerts());
+    public ResponseEntity<List<AlertResponse>> getUnresolvedAlerts(@RequestParam(defaultValue="UNRESOLVED") String status) {
+        return ResponseEntity.ok(adminAlertService.getAlerts(status).stream().filter(a -> access.canZone(a.getZoneId())).toList());
     }
 
     @PostMapping("/{alertId}/actions")
     public ResponseEntity<Void> resolveAlert(
             @PathVariable Long alertId, 
-            @RequestBody ActionRequest request) {
+            @jakarta.validation.Valid @RequestBody ActionRequest request) {
+        access.requireManager();
+        access.requireZone(adminAlertService.zoneId(alertId));
+        request.setAdminId(access.current().id());
         adminAlertService.resolveAlert(alertId, request);
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/batch-actions")
+    public ResponseEntity<Void> resolveAllAlerts(@jakarta.validation.Valid @RequestBody(required = false) ActionRequest request) {
+        if (request == null) {
+            request = new ActionRequest();
+            request.setActionDetail("관리자 일괄 확인 처리");
+
+        }
+        access.requireManager();
+        request.setAdminId(access.current().id());
+        adminAlertService.resolveAllAlerts(request, access.isDeveloper() ? null : access.current().zoneIds());
         return ResponseEntity.ok().build();
     }
 }
