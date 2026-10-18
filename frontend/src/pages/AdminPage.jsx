@@ -1993,6 +1993,7 @@ export default function AdminPage() {
         floor: newRestroomFloor,
         gender: newRestroomGender,
         deviceId: newRestroomDeviceId.trim(),
+        strictDeviceSet: true, // 기기 등록 실패를 성공으로 숨기지 않는다.
         lat: parsedLat,
         lng: parsedLng,
         zoneType: 'TOILET',

@@ -9,6 +9,8 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
@@ -240,6 +242,9 @@ class AuthenticationSecurityIntegrationTest {
         String admin=token();
         assertEquals(403,request("POST","/api/admin/alerts/"+second.getId()+"/actions",Map.of("adminId",9999,"actionDetail","forged"),bearer(admin)).statusCode());
         assertEquals(1,mapper.readTree(request("GET","/api/admin/alerts",null,bearer(admin)).body()).size());
+        var later=alerts.saveAndFlush(Alert.builder().zone(zones.getReferenceById(own)).alertType(AlertType.FREEZE).status(AlertStatus.UNRESOLVED).createdAt(first.getCreatedAt().plusMinutes(1)).build());
+        var listed=mapper.readTree(request("GET","/api/admin/alerts?status=ALL",null,bearer(admin)).body());
+        assertEquals(2,listed.size());assertEquals(later.getId(),listed.get(0).get("alertId").asLong());
         assertEquals(200,request("POST","/api/admin/alerts/batch-actions",Map.of("adminId",9999,"actionDetail","confirmed"),bearer(admin)).statusCode());
         assertEquals(AlertStatus.RESOLVED,alerts.findById(first.getId()).orElseThrow().getStatus());
         assertEquals(AlertStatus.UNRESOLVED,alerts.findById(second.getId()).orElseThrow().getStatus());
@@ -267,15 +272,25 @@ class AuthenticationSecurityIntegrationTest {
         var publicView=request("GET","/api/public/zones",null,Map.of());assertEquals(200,publicView.statusCode());assertFalse(publicView.body().contains("macAddress"));assertFalse(publicView.body().contains("sensorIds"));
     }
 
-    @Test void rotatingAndRevokingDeviceKeysInvalidateOnlyThatDevice() throws Exception {
-        long id=fixture();String mac="02:11:22:33:44:55",old=deviceKey;
-        String dev=devToken();var issued=request("POST","/api/admin/device-credentials/"+mac+"/rotate",null,bearer(dev));assertEquals(200,issued.statusCode());assertEquals("no-store",issued.headers().firstValue("cache-control").orElseThrow());
-        String key=mapper.readTree(issued.body()).path("key").asText();assertNotEquals(old,key);assertEquals(AuthService.hash(key),deviceRows.findById(mac).orElseThrow().getKeyHash());
-        assertEquals(401,request("POST","/api/iot/"+id+"/data",packet("old",mac),deviceHeaders(mac,old)).statusCode());
-        assertEquals(401,request("POST","/api/iot/"+id+"/data",packet("wrong-device",mac),deviceHeaders("02:99:99:99:99:99",key)).statusCode());
-        assertEquals(201,request("POST","/api/iot/"+id+"/data",packet("new",mac),deviceHeaders(mac,key)).statusCode());
-        assertEquals(204,request("DELETE","/api/admin/device-credentials/"+mac,null,bearer(dev)).statusCode());
-        assertEquals(401,request("POST","/api/iot/"+id+"/data",packet("revoked",mac),deviceHeaders(mac,key)).statusCode());assertEquals(1,raw.count());
+    @Test void registeredMacSendsWithoutDeviceKeyButUnknownMacIsRejected() throws Exception {
+        long id=fixture();String mac="02:11:22:33:44:55";
+        assertEquals(201,request("POST","/api/iot/"+id+"/data",packet("no-key",mac),Map.of("X-Device-Mac",mac)).statusCode());
+        assertEquals(201,request("POST","/api/iot/"+id+"/data",packet("stale-key",mac),deviceHeaders(mac,"old-key-is-ignored")).statusCode());
+        assertEquals(401,request("POST","/api/iot/"+id+"/data",packet("unknown",mac),Map.of("X-Device-Mac","02:99:99:99:99:99")).statusCode());
+        assertEquals(2,raw.count());
+    }
+
+    @Test void configuredSharedKeyIsRequiredFromRegisteredDevices() throws Exception {
+        long id=fixture();String mac="02:11:22:33:44:55";
+        Object target=AopTestUtils.getTargetObject(deviceCredentials);
+        ReflectionTestUtils.setField(target,"sharedKey","capstone-shared-demo-key");
+        try {
+            assertEquals(201,request("POST","/api/iot/"+id+"/data",packet("shared",mac),deviceHeaders(mac,"capstone-shared-demo-key")).statusCode());
+            assertEquals(401,request("POST","/api/iot/"+id+"/data",packet("wrong",mac),deviceHeaders(mac,"wrong-key")).statusCode());
+            assertEquals(401,request("POST","/api/iot/"+id+"/data",packet("missing",mac),Map.of("X-Device-Mac",mac)).statusCode());
+            assertEquals(401,request("POST","/api/iot/"+id+"/data",packet("unknown",mac),deviceHeaders("02:99:99:99:99:99","capstone-shared-demo-key")).statusCode());
+            assertEquals(1,raw.count());
+        } finally { ReflectionTestUtils.setField(target,"sharedKey",""); }
     }
 
     @Test void officialPacketsAppearInAuthenticatedSnapshotsAndHistory() throws Exception {

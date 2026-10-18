@@ -10,7 +10,6 @@ import com.tcp.cleanmanagement.entity.DeviceSetHistory;
 import com.tcp.cleanmanagement.enums.AlertStatus;
 import com.tcp.cleanmanagement.repository.ActionLogRepository;
 import com.tcp.cleanmanagement.repository.AlertRepository;
-// import com.tcp.cleanmanagement.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,12 +34,12 @@ public class AdminAlertService {
     @Transactional(readOnly=true)
     public List<AlertResponse> getAlerts(String status) {
         List<Alert> rows;
-        if("ALL".equals(status)) rows=alertRepository.findAll();
+        if("ALL".equals(status)) rows=alertRepository.findAllByOrderByCreatedAtDescIdDesc();
         else {
-            try { rows=alertRepository.findByStatus(AlertStatus.valueOf(status)); }
+            try { rows=alertRepository.findByStatusOrderByCreatedAtDescIdDesc(AlertStatus.valueOf(status)); }
             catch(IllegalArgumentException error){throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Invalid alert status");}
         }
-        return rows.stream().sorted(java.util.Comparator.comparing(Alert::getCreatedAt).reversed()).map(this::responseFor).toList();
+        return rows.stream().map(this::responseFor).toList();
     }
     private AlertResponse responseFor(Alert alert) {
         DeviceSetHistory history = alert.getDeviceSetHistory();
